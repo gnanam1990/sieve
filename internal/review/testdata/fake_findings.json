@@ -1,0 +1,5 @@
+{"findings": [
+  {"Path": "alpha.txt", "Line": 3, "Side": "RIGHT", "Severity": "major", "Confidence": 0.9, "Category": "correctness", "Title": "Spelled-out number breaks lexical ordering", "Body": "Line 3 replaces a numeric token with a word; downstream consumers sorting these lines will misorder it. Keep the numeral."},
+  {"Path": "alpha.txt", "Line": 999, "Side": "RIGHT", "Severity": "major", "Confidence": 0.9, "Category": "bug", "Title": "Hallucinated anchor that must be dropped", "Body": "This line does not exist in the diff."},
+  {"Path": "beta.txt", "Line": 5, "Side": "RIGHT", "Severity": "blocker", "Confidence": 0.9, "Category": "bug", "Title": "Invalid severity that must be dropped", "Body": "blocker is not a valid severity."}
+]}

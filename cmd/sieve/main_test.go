@@ -46,14 +46,28 @@ func TestRunUnknownCommand(t *testing.T) {
 	}
 }
 
-func TestReviewRequiresDryRun(t *testing.T) {
+// Without --dry-run the LLM pass runs, which needs a complete provider
+// config; the default (anthropic, no model) must fail fast and clearly.
+func TestReviewWithoutProviderConfigFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/files"):
+			fmt.Fprint(w, `[]`)
+		case strings.Contains(r.Header.Get("Accept"), "diff"):
+			fmt.Fprint(w, "")
+		default:
+			fmt.Fprint(w, `{"number":1,"title":"T","state":"open","user":{"login":"a"},"base":{"sha":"b"},"head":{"sha":"h"}}`)
+		}
+	}))
+	defer srv.Close()
 	var out, errOut bytes.Buffer
-	code := run([]string{"review", "--repo", "o/r", "--pr", "1", "--token", "x"}, &out, &errOut)
+	code := run([]string{"review", "--repo", "o/r", "--pr", "1", "--token", "x",
+		"--api-url", srv.URL, "--config", t.TempDir() + "/.sieve.yml"}, &out, &errOut)
 	if code != exitError {
 		t.Fatalf("exit %d, want %d", code, exitError)
 	}
-	if !strings.Contains(errOut.String(), "--dry-run") {
-		t.Fatalf("error should mention --dry-run: %s", errOut.String())
+	if !strings.Contains(errOut.String(), "provider.model") {
+		t.Fatalf("error should name the missing config key: %s", errOut.String())
 	}
 }
 
