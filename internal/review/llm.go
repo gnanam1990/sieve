@@ -49,16 +49,18 @@ func newProvider(cfg config.Config, opts Options, onRetry func()) (provider.Prov
 }
 
 // reviewPass runs prompts through the provider over bounded-parallel
-// batches, parses and anchor-validates findings, and merges them into rc.
-func reviewPass(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg config.Config, opts Options) error {
+// batches, parses and anchor-validates findings, and merges them into rc. It
+// returns the kept (reviewed) file diffs so the caller can build the gate's
+// content index and inline-suggestion anchors without re-deriving them.
+func reviewPass(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg config.Config, opts Options) ([]diff.FileDiff, error) {
 	var retries atomic.Int64
 	p, err := newProvider(cfg, opts, func() { retries.Add(1) })
 	if err != nil {
-		return err
+		return nil, err
 	}
 	system, err := prompt.System()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	input, kept := buildPromptInput(ctx, rc, client, cfg, opts)
@@ -103,7 +105,7 @@ func reviewPass(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg c
 	findings.Sort(rc.Findings)
 	rc.Stats.FindingsTotal = len(rc.Findings)
 	rc.Stats.Retries = int(retries.Load())
-	return nil
+	return kept, nil
 }
 
 // buildPromptInput converts kept files into prompt input, optionally

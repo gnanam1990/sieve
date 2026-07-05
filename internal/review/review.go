@@ -10,11 +10,13 @@ import (
 	"log/slog"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/gnanam1990/sieve/internal/config"
 	"github.com/gnanam1990/sieve/internal/diff"
 	"github.com/gnanam1990/sieve/internal/filter"
 	"github.com/gnanam1990/sieve/internal/findings"
+	"github.com/gnanam1990/sieve/internal/gate"
 	"github.com/gnanam1990/sieve/internal/gh"
 )
 
@@ -41,6 +43,8 @@ type Stats struct {
 	Retries         int
 	InputTokens     int
 	OutputTokens    int
+
+	InlinePostFailed int // inline comments that failed to post (--post); >0 => exit 2
 }
 
 // ReviewContext is the full input a future review pass will consume, and
@@ -59,6 +63,7 @@ type ReviewContext struct {
 	Truncated bool
 	Files     []FileEntry
 	Findings  []findings.Finding
+	Gate      *gate.GateResult `json:",omitempty"` // tier routing + drop/demote counters + fingerprints
 	Stats     Stats
 }
 
@@ -68,9 +73,19 @@ type Options struct {
 	PRNumber   int
 	Token      string
 	ConfigPath string
-	DryRun     bool   // stop after context assembly; no LLM calls
-	APIBaseURL string // override for tests; empty means api.github.com
+	DryRun     bool          // stop after context assembly; no LLM calls
+	Post       bool          // write results to the PR (walkthrough + inline review)
+	APIBaseURL string        // override for tests; empty means api.github.com
+	Now        func() string // metadata timestamp source; defaults to time.Now (UTC RFC3339)
 	Log        *slog.Logger
+}
+
+// now returns the metadata timestamp, using the injected clock when set.
+func (o Options) now() string {
+	if o.Now != nil {
+		return o.Now()
+	}
+	return time.Now().UTC().Format(time.RFC3339)
 }
 
 // Run performs the full pipeline: stage-1 context assembly, then (unless
@@ -91,10 +106,16 @@ func Run(ctx context.Context, opts Options) (*ReviewContext, error) {
 		return nil, err
 	}
 	if rc.Draft && !cfg.Review.ReviewDrafts {
-		opts.Log.Info("PR is a draft; skipping LLM review (set review.review_drafts: true to review drafts)")
+		// R1.4: --post on a draft still respects review_drafts:false — skip,
+		// notice, exit 0. No gate, no writes.
+		opts.Log.Info("PR is a draft; skipping review and any posting (set review.review_drafts: true to review drafts)")
 		return rc, nil
 	}
-	if err := reviewPass(ctx, rc, client, cfg, opts); err != nil {
+	kept, err := reviewPass(ctx, rc, client, cfg, opts)
+	if err != nil {
+		return nil, err
+	}
+	if err := gateAndPost(ctx, rc, client, cfg, opts, kept); err != nil {
 		return nil, err
 	}
 	return rc, nil

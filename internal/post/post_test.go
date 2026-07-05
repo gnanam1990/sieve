@@ -173,7 +173,7 @@ func TestMarkerDiscoveryAcrossPages(t *testing.T) {
 }
 
 func TestMultipleWalkthroughsWarnsUsesFirst(t *testing.T) {
-	p := testPoster(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	p := testPoster(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, `[{"id":10,"body":%q,"user":{"login":"sieve"}},{"id":20,"body":%q,"user":{"login":"sieve"}}]`,
 			walkthroughBody(), walkthroughBody())
 	}))
@@ -188,7 +188,7 @@ func TestMultipleWalkthroughsWarnsUsesFirst(t *testing.T) {
 
 func TestLocateCorruptMetaDoesNotFail(t *testing.T) {
 	body := render.WalkthroughMarker + "\n<!-- sieve:meta v1 !!!bad!!! -->\nbody\n"
-	p := testPoster(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	p := testPoster(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, `[{"id":7,"body":%q,"user":{"login":"sieve"}}]`, body)
 	}))
 	loc, err := p.LocateWalkthrough(context.Background())
@@ -292,7 +292,7 @@ func TestSubmitInlineReviewBatch(t *testing.T) {
 
 func TestSubmitInlineReviewEmptyNoRequest(t *testing.T) {
 	rec := &recorder{}
-	p := testPoster(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	p := testPoster(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		rec.add(r, readBody(r))
 	}))
 	failed, err := p.SubmitInlineReview(context.Background(), "h", nil)
@@ -349,7 +349,7 @@ func TestSubmitInlineReview422Fallback(t *testing.T) {
 }
 
 func TestSubmitInlineReviewHardError(t *testing.T) {
-	p := testPoster(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	p := testPoster(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprint(w, `{"message":"boom"}`)
 	}))

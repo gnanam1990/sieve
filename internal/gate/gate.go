@@ -57,6 +57,8 @@ type Stats struct {
 }
 
 // GateResult is the routing outcome.
+//
+//nolint:revive // spec-mandated name (R3); gate.Result would lose the "gate" cue at call sites
 type GateResult struct {
 	Inline   []Finding
 	Notes    []Finding

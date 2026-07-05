@@ -235,10 +235,10 @@ func TestParseResponseEmptyFindings(t *testing.T) {
 }
 
 func TestRankAndSeverityOrder(t *testing.T) {
-	if !(Rank(SeverityCritical) < Rank(SeverityMajor) &&
-		Rank(SeverityMajor) < Rank(SeverityMinor) &&
-		Rank(SeverityMinor) < Rank(SeverityNit)) {
-		t.Fatal("ranks must strictly decrease in severity")
+	if Rank(SeverityCritical) >= Rank(SeverityMajor) ||
+		Rank(SeverityMajor) >= Rank(SeverityMinor) ||
+		Rank(SeverityMinor) >= Rank(SeverityNit) {
+		t.Fatal("ranks must strictly increase from critical to nit")
 	}
 	if Rank(Severity("bogus")) <= Rank(SeverityNit) {
 		t.Fatal("unknown severity must rank after all known ones")
