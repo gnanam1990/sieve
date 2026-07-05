@@ -116,7 +116,7 @@ func build(ctx context.Context, opts Options, cfg config.Config) (*ReviewContext
 		return nil, nil, fmt.Errorf("invalid --repo %q, want owner/name", opts.Repo)
 	}
 
-	client, err := gh.New(opts.Token, opts.Log)
+	client, err := gh.New(gh.NewStaticTokenSource(opts.Token), opts.Log)
 	if err != nil {
 		return nil, nil, err
 	}

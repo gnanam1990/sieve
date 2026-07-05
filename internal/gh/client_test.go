@@ -22,7 +22,7 @@ func testClient(t *testing.T, h http.Handler) (*Client, *httptest.Server) {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	c, err := New("test-token", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	c, err := New(NewStaticTokenSource("test-token"), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,9 +31,34 @@ func testClient(t *testing.T, h http.Handler) (*Client, *httptest.Server) {
 	return c, srv
 }
 
-func TestNewRequiresToken(t *testing.T) {
-	if _, err := New("", slog.Default()); err == nil {
-		t.Fatal("want error for missing token, got nil")
+func TestNewRequiresTokenSource(t *testing.T) {
+	if _, err := New(nil, slog.Default()); err == nil {
+		t.Fatal("want error for nil TokenSource, got nil")
+	}
+}
+
+// TestStaticTokenSourceEmpty asserts the fail-fast contract survives the move
+// from a bare string: an empty static token errors at resolution time.
+func TestStaticTokenSourceEmpty(t *testing.T) {
+	if _, err := NewStaticTokenSource("").Token(context.Background()); err == nil {
+		t.Fatal("empty static token must error")
+	}
+	got, err := NewStaticTokenSource("tok").Token(context.Background())
+	if err != nil || got != "tok" {
+		t.Fatalf("got %q err %v, want tok", got, err)
+	}
+}
+
+// TestMissingTokenSurfacesOnRequest verifies an empty token is reported on
+// the first fetch (build no longer rejects it at construction).
+func TestMissingTokenSurfacesOnRequest(t *testing.T) {
+	c, _ := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"number":1}`)
+	}))
+	c.Tokens = NewStaticTokenSource("")
+	_, err := c.GetPR(context.Background(), "o", "r", 1)
+	if err == nil || !strings.Contains(err.Error(), "token") {
+		t.Fatalf("want token error on request, got %v", err)
 	}
 }
 
@@ -241,6 +266,63 @@ func TestGivesUpAfterMaxAttempts(t *testing.T) {
 	}
 	if calls.Load() != maxAttempts {
 		t.Fatalf("got %d calls, want %d", calls.Load(), maxAttempts)
+	}
+}
+
+func TestListIssueCommentsPagination(t *testing.T) {
+	c, _ := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/issues/7/comments") {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		page := r.URL.Query().Get("page")
+		n := 100
+		if page == "2" {
+			n = 3
+		}
+		rows := make([]string, n)
+		for i := range rows {
+			rows[i] = fmt.Sprintf(`{"id":%d,"body":"c%s_%d","user":{"login":"bot"}}`, i, page, i)
+		}
+		fmt.Fprint(w, "["+strings.Join(rows, ",")+"]")
+	}))
+	comments, err := c.ListIssueComments(context.Background(), "o", "r", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 103 || comments[0].User.Login != "bot" {
+		t.Fatalf("got %d comments (%+v)", len(comments), comments[0])
+	}
+}
+
+func TestSendAppliesAuthAndVersion(t *testing.T) {
+	c, _ := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method %s", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Errorf("auth %q", got)
+		}
+		if r.Header.Get("X-GitHub-Api-Version") == "" {
+			t.Error("missing api-version header")
+		}
+		if r.Header.Get("Accept") != "application/vnd.github+json" {
+			t.Errorf("default accept not applied: %q", r.Header.Get("Accept"))
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"ok":true}`)
+	}))
+	// Method chosen by the caller (here the test stands in for internal/post).
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, c.BaseURL+"/x", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.Send(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status %d", resp.StatusCode)
 	}
 }
 
