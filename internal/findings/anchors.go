@@ -48,6 +48,29 @@ func NewAnchors(kept []diff.FileDiff) *Anchors {
 	return a
 }
 
+// RightRangeCommentable reports whether every line in [line, end] (end == 0
+// means the single line) is a commentable RIGHT-side line within one hunk.
+// A committable ```suggestion block is only valid when this holds, because the
+// suggestion replaces exactly that RIGHT-side range.
+func (a *Anchors) RightRangeCommentable(path string, line, end int) bool {
+	if end == 0 {
+		end = line
+	}
+	for _, h := range a.files[path] {
+		covered := true
+		for n := line; n <= end; n++ {
+			if !h.right[n] {
+				covered = false
+				break
+			}
+		}
+		if covered {
+			return true
+		}
+	}
+	return false
+}
+
 // Validate rejects any finding whose shape is invalid or whose anchor does
 // not land on commentable diff lines. Invalid findings must be dropped by
 // the caller — never repaired or re-anchored.

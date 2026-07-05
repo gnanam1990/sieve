@@ -233,3 +233,46 @@ func TestParseResponseEmptyFindings(t *testing.T) {
 		t.Fatalf("fs=%v err=%v", fs, err)
 	}
 }
+
+func TestRankAndSeverityOrder(t *testing.T) {
+	if !(Rank(SeverityCritical) < Rank(SeverityMajor) &&
+		Rank(SeverityMajor) < Rank(SeverityMinor) &&
+		Rank(SeverityMinor) < Rank(SeverityNit)) {
+		t.Fatal("ranks must strictly decrease in severity")
+	}
+	if Rank(Severity("bogus")) <= Rank(SeverityNit) {
+		t.Fatal("unknown severity must rank after all known ones")
+	}
+}
+
+func TestAtLeastAsSevere(t *testing.T) {
+	if !AtLeastAsSevere(SeverityCritical, SeverityMajor) {
+		t.Error("critical >= major")
+	}
+	if !AtLeastAsSevere(SeverityMajor, SeverityMajor) {
+		t.Error("major >= major (inclusive)")
+	}
+	if AtLeastAsSevere(SeverityMinor, SeverityMajor) {
+		t.Error("minor is not >= major")
+	}
+}
+
+func TestRightRangeCommentable(t *testing.T) {
+	a := testAnchors()
+	// RIGHT lines present: 1,2,3,4 (hunk 1) and 11,12 (hunk 2).
+	if !a.RightRangeCommentable("main.go", 2, 0) {
+		t.Error("single RIGHT line 2 should be commentable")
+	}
+	if !a.RightRangeCommentable("main.go", 2, 4) {
+		t.Error("range 2-4 within one hunk should be commentable")
+	}
+	if a.RightRangeCommentable("main.go", 4, 11) {
+		t.Error("range spanning two hunks must not be commentable")
+	}
+	if a.RightRangeCommentable("main.go", 99, 0) {
+		t.Error("absent line must not be commentable")
+	}
+	if a.RightRangeCommentable("other.go", 1, 0) {
+		t.Error("unknown path must not be commentable")
+	}
+}
