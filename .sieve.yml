@@ -1,0 +1,15 @@
+# sieve configuration — every key is optional; these are the defaults.
+# Unknown keys are a hard error (typo protection).
+
+paths:
+  exclude: []
+  # exclude:
+  #   - "docs/**"
+  #   - "**/*.gen.go"
+
+review:
+  max_comments: 10     # reserved — validated now, used in stage 3 (1-50)
+  min_confidence: 0.7  # reserved — validated now, used in stage 3 (0.0-1.0)
+
+provider:
+  model: ""            # reserved — parsed + validated, unused until stage 2
