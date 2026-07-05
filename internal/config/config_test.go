@@ -43,11 +43,11 @@ provider:
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{
-		Paths:    Paths{Exclude: []string{"docs/**", "**/*.gen.go"}},
-		Review:   Review{MaxComments: 5, MinConfidence: 0.9},
-		Provider: Provider{Model: "some-model"},
-	}
+	want := Default()
+	want.Paths = Paths{Exclude: []string{"docs/**", "**/*.gen.go"}}
+	want.Review.MaxComments = 5
+	want.Review.MinConfidence = 0.9
+	want.Provider.Model = "some-model"
 	if diff := cmp.Diff(want, cfg); diff != "" {
 		t.Errorf("config mismatch (-want +got):\n%s", diff)
 	}
@@ -79,6 +79,15 @@ func TestLoadValidation(t *testing.T) {
 		"max_comments too high":  "review:\n  max_comments: 51\n",
 		"min_confidence too low": "review:\n  min_confidence: -0.1\n",
 		"min_confidence too big": "review:\n  min_confidence: 1.5\n",
+		"max_tokens too low":     "provider:\n  max_tokens: 255\n",
+		"max_tokens too high":    "provider:\n  max_tokens: 32769\n",
+		"temperature too high":   "provider:\n  temperature: 1.5\n",
+		"temperature negative":   "provider:\n  temperature: -0.1\n",
+		"concurrency too low":    "review:\n  concurrency: 0\n",
+		"concurrency too high":   "review:\n  concurrency: 9\n",
+		"timeout too low":        "provider:\n  timeout_seconds: 9\n",
+		"timeout too high":       "provider:\n  timeout_seconds: 601\n",
+		"bad provider type":      "provider:\n  type: bedrock\n",
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -120,5 +129,60 @@ func TestEnvOutOfRangeStillValidated(t *testing.T) {
 	t.Setenv("SIEVE_MAX_COMMENTS", "99")
 	if _, err := Load(filepath.Join(t.TempDir(), "nope.yml")); err == nil {
 		t.Fatal("want validation error for out-of-range env value, got nil")
+	}
+}
+
+// TestAPIKeyFieldIsRejected asserts the security invariant: there is no
+// api_key config field, so a key pasted into .sieve.yml is a hard error.
+func TestAPIKeyFieldIsRejected(t *testing.T) {
+	_, err := Load(writeConfig(t, "provider:\n  api_key: sk-secret\n"))
+	if err == nil {
+		t.Fatal("api_key in config must be an unknown-key error")
+	}
+	if !strings.Contains(err.Error(), "api_key") {
+		t.Fatalf("error should name api_key: %v", err)
+	}
+}
+
+func TestValidateForReview(t *testing.T) {
+	cases := map[string]struct {
+		mutate  func(*Config)
+		wantErr string
+	}{
+		"anthropic needs model":    {func(c *Config) { c.Provider.Model = "" }, "provider.model"},
+		"anthropic needs key env":  {func(c *Config) { c.Provider.Model = "m"; c.Provider.APIKeyEnv = "" }, "api_key_env"},
+		"openai-compat needs base": {func(c *Config) { c.Provider.Type = "openai-compat"; c.Provider.Model = "m" }, "base_url"},
+		"fake needs fixture":       {func(c *Config) { c.Provider.Type = "fake" }, "fixture"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := Default()
+			c.mutate(&cfg)
+			err := cfg.ValidateForReview()
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("want error containing %q, got %v", c.wantErr, err)
+			}
+		})
+	}
+	ok := Default()
+	ok.Provider.Model = "m"
+	if err := ok.ValidateForReview(); err != nil {
+		t.Fatalf("valid anthropic config rejected: %v", err)
+	}
+	fake := Default()
+	fake.Provider.Type = "fake"
+	fake.Provider.Fixture = "x.json"
+	if err := fake.ValidateForReview(); err != nil {
+		t.Fatalf("valid fake config rejected: %v", err)
+	}
+}
+
+func TestIncludeFileContentExplicitFalse(t *testing.T) {
+	cfg, err := Load(writeConfig(t, "review:\n  include_file_content: false\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Review.IncludeFileContent {
+		t.Fatal("explicit false must override the true default")
 	}
 }
