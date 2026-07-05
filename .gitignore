@@ -1,0 +1,10 @@
+/sieve
+coverage.out
+coverage.diff.out
+*.test
+
+# never commit secrets
+.env
+.env.*
+*.pem
+*.key
