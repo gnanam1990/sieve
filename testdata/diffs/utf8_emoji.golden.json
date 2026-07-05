@@ -1,0 +1,30 @@
+[
+  {
+    "OldPath": "i18n.txt",
+    "NewPath": "i18n.txt",
+    "Status": "modified",
+    "Hunks": [
+      {
+        "OldStart": 1,
+        "OldLines": 1,
+        "NewStart": 1,
+        "NewLines": 1,
+        "Header": "",
+        "Lines": [
+          {
+            "Kind": "removed",
+            "OldNum": 1,
+            "NewNum": 0,
+            "Content": "greeting: hello"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 1,
+            "Content": "greeting: héllo 🎉 世界"
+          }
+        ]
+      }
+    ]
+  }
+]

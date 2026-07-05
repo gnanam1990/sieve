@@ -1,0 +1,328 @@
+[
+  {
+    "OldPath": "alpha.txt",
+    "NewPath": "alpha.txt",
+    "Status": "modified",
+    "Hunks": [
+      {
+        "OldStart": 1,
+        "OldLines": 6,
+        "NewStart": 1,
+        "NewLines": 6,
+        "Header": "",
+        "Lines": [
+          {
+            "Kind": "context",
+            "OldNum": 1,
+            "NewNum": 1,
+            "Content": "alpha line 1"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 2,
+            "NewNum": 2,
+            "Content": "alpha line 2"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 3,
+            "NewNum": 0,
+            "Content": "alpha line 3"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 3,
+            "Content": "alpha line three"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 4,
+            "NewNum": 4,
+            "Content": "alpha line 4"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 5,
+            "NewNum": 5,
+            "Content": "alpha line 5"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 6,
+            "NewNum": 6,
+            "Content": "alpha line 6"
+          }
+        ]
+      },
+      {
+        "OldStart": 27,
+        "OldLines": 14,
+        "NewStart": 27,
+        "NewLines": 14,
+        "Header": "alpha line 26",
+        "Lines": [
+          {
+            "Kind": "context",
+            "OldNum": 27,
+            "NewNum": 27,
+            "Content": "alpha line 27"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 28,
+            "NewNum": 28,
+            "Content": "alpha line 28"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 29,
+            "NewNum": 29,
+            "Content": "alpha line 29"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 30,
+            "NewNum": 0,
+            "Content": "alpha line 30"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 31,
+            "NewNum": 0,
+            "Content": "alpha line 31"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 32,
+            "NewNum": 0,
+            "Content": "alpha line 32"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 33,
+            "NewNum": 0,
+            "Content": "alpha line 33"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 34,
+            "NewNum": 0,
+            "Content": "alpha line 34"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 35,
+            "NewNum": 0,
+            "Content": "alpha line 35"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 36,
+            "NewNum": 0,
+            "Content": "alpha line 36"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 37,
+            "NewNum": 0,
+            "Content": "alpha line 37"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 38,
+            "NewNum": 0,
+            "Content": "alpha line 38"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 39,
+            "NewNum": 0,
+            "Content": "alpha line 39"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 30,
+            "Content": "alpha line three0"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 31,
+            "Content": "alpha line three1"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 32,
+            "Content": "alpha line three2"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 33,
+            "Content": "alpha line three3"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 34,
+            "Content": "alpha line three4"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 35,
+            "Content": "alpha line three5"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 36,
+            "Content": "alpha line three6"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 37,
+            "Content": "alpha line three7"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 38,
+            "Content": "alpha line three8"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 39,
+            "Content": "alpha line three9"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 40,
+            "NewNum": 40,
+            "Content": "alpha line 40"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "OldPath": "beta.txt",
+    "NewPath": "beta.txt",
+    "Status": "modified",
+    "Hunks": [
+      {
+        "OldStart": 2,
+        "OldLines": 7,
+        "NewStart": 2,
+        "NewLines": 7,
+        "Header": "beta line 1",
+        "Lines": [
+          {
+            "Kind": "context",
+            "OldNum": 2,
+            "NewNum": 2,
+            "Content": "beta line 2"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 3,
+            "NewNum": 3,
+            "Content": "beta line 3"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 4,
+            "NewNum": 4,
+            "Content": "beta line 4"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 5,
+            "NewNum": 0,
+            "Content": "beta line 5"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 5,
+            "Content": "beta line five"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 6,
+            "NewNum": 6,
+            "Content": "beta line 6"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 7,
+            "NewNum": 7,
+            "Content": "beta line 7"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 8,
+            "NewNum": 8,
+            "Content": "beta line 8"
+          }
+        ]
+      },
+      {
+        "OldStart": 35,
+        "OldLines": 6,
+        "NewStart": 35,
+        "NewLines": 6,
+        "Header": "beta line 34",
+        "Lines": [
+          {
+            "Kind": "context",
+            "OldNum": 35,
+            "NewNum": 35,
+            "Content": "beta line 35"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 36,
+            "NewNum": 36,
+            "Content": "beta line 36"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 37,
+            "NewNum": 37,
+            "Content": "beta line 37"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 38,
+            "NewNum": 0,
+            "Content": "beta line 38"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 38,
+            "Content": "beta line thirty-eight"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 39,
+            "NewNum": 39,
+            "Content": "beta line 39"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 40,
+            "NewNum": 40,
+            "Content": "beta line 40"
+          }
+        ]
+      }
+    ]
+  }
+]

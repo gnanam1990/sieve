@@ -1,0 +1,38 @@
+[
+  {
+    "OldPath": "noeof.txt",
+    "NewPath": "noeof.txt",
+    "Status": "modified",
+    "Hunks": [
+      {
+        "OldStart": 1,
+        "OldLines": 2,
+        "NewStart": 1,
+        "NewLines": 2,
+        "Header": "",
+        "Lines": [
+          {
+            "Kind": "context",
+            "OldNum": 1,
+            "NewNum": 1,
+            "Content": "stable"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 2,
+            "NewNum": 0,
+            "Content": "last old",
+            "NoEOF": true
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 2,
+            "Content": "last new",
+            "NoEOF": true
+          }
+        ]
+      }
+    ]
+  }
+]

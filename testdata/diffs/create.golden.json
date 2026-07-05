@@ -1,0 +1,36 @@
+[
+  {
+    "OldPath": "",
+    "NewPath": "created.txt",
+    "Status": "added",
+    "Hunks": [
+      {
+        "OldStart": 0,
+        "OldLines": 0,
+        "NewStart": 1,
+        "NewLines": 3,
+        "Header": "",
+        "Lines": [
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 1,
+            "Content": "first"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 2,
+            "Content": "second"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 3,
+            "Content": "third"
+          }
+        ]
+      }
+    ]
+  }
+]

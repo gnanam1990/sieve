@@ -1,0 +1,258 @@
+[
+  {
+    "OldPath": "beta.txt",
+    "NewPath": "",
+    "Status": "deleted",
+    "Hunks": [
+      {
+        "OldStart": 1,
+        "OldLines": 40,
+        "NewStart": 0,
+        "NewLines": 0,
+        "Header": "",
+        "Lines": [
+          {
+            "Kind": "removed",
+            "OldNum": 1,
+            "NewNum": 0,
+            "Content": "beta line 1"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 2,
+            "NewNum": 0,
+            "Content": "beta line 2"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 3,
+            "NewNum": 0,
+            "Content": "beta line 3"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 4,
+            "NewNum": 0,
+            "Content": "beta line 4"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 5,
+            "NewNum": 0,
+            "Content": "beta line five"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 6,
+            "NewNum": 0,
+            "Content": "beta line 6"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 7,
+            "NewNum": 0,
+            "Content": "beta line 7"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 8,
+            "NewNum": 0,
+            "Content": "beta line 8"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 9,
+            "NewNum": 0,
+            "Content": "beta line 9"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 10,
+            "NewNum": 0,
+            "Content": "beta line 10"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 11,
+            "NewNum": 0,
+            "Content": "beta line 11"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 12,
+            "NewNum": 0,
+            "Content": "beta line 12"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 13,
+            "NewNum": 0,
+            "Content": "beta line 13"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 14,
+            "NewNum": 0,
+            "Content": "beta line 14"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 15,
+            "NewNum": 0,
+            "Content": "beta line 15"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 16,
+            "NewNum": 0,
+            "Content": "beta line 16"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 17,
+            "NewNum": 0,
+            "Content": "beta line 17"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 18,
+            "NewNum": 0,
+            "Content": "beta line 18"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 19,
+            "NewNum": 0,
+            "Content": "beta line 19"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 20,
+            "NewNum": 0,
+            "Content": "beta line 20"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 21,
+            "NewNum": 0,
+            "Content": "beta line 21"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 22,
+            "NewNum": 0,
+            "Content": "beta line 22"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 23,
+            "NewNum": 0,
+            "Content": "beta line 23"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 24,
+            "NewNum": 0,
+            "Content": "beta line 24"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 25,
+            "NewNum": 0,
+            "Content": "beta line 25"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 26,
+            "NewNum": 0,
+            "Content": "beta line 26"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 27,
+            "NewNum": 0,
+            "Content": "beta line 27"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 28,
+            "NewNum": 0,
+            "Content": "beta line 28"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 29,
+            "NewNum": 0,
+            "Content": "beta line 29"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 30,
+            "NewNum": 0,
+            "Content": "beta line 30"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 31,
+            "NewNum": 0,
+            "Content": "beta line 31"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 32,
+            "NewNum": 0,
+            "Content": "beta line 32"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 33,
+            "NewNum": 0,
+            "Content": "beta line 33"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 34,
+            "NewNum": 0,
+            "Content": "beta line 34"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 35,
+            "NewNum": 0,
+            "Content": "beta line 35"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 36,
+            "NewNum": 0,
+            "Content": "beta line 36"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 37,
+            "NewNum": 0,
+            "Content": "beta line 37"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 38,
+            "NewNum": 0,
+            "Content": "beta line thirty-eight"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 39,
+            "NewNum": 0,
+            "Content": "beta line 39"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 40,
+            "NewNum": 0,
+            "Content": "beta line 40"
+          }
+        ]
+      }
+    ]
+  }
+]

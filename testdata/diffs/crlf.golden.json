@@ -1,0 +1,42 @@
+[
+  {
+    "OldPath": "win.txt",
+    "NewPath": "win.txt",
+    "Status": "modified",
+    "Hunks": [
+      {
+        "OldStart": 1,
+        "OldLines": 3,
+        "NewStart": 1,
+        "NewLines": 3,
+        "Header": "",
+        "Lines": [
+          {
+            "Kind": "context",
+            "OldNum": 1,
+            "NewNum": 1,
+            "Content": "one\r"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 2,
+            "NewNum": 0,
+            "Content": "two\r"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 2,
+            "Content": "two changed\r"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 3,
+            "NewNum": 3,
+            "Content": "three\r"
+          }
+        ]
+      }
+    ]
+  }
+]

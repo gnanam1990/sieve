@@ -1,0 +1,7 @@
+diff --git a/i18n.txt b/i18n.txt
+index 3af3c0d..7e5b7ad 100644
+--- a/i18n.txt
++++ b/i18n.txt
+@@ -1 +1 @@
+-greeting: hello
++greeting: héllo 🎉 世界

@@ -1,0 +1,66 @@
+[
+  {
+    "OldPath": "omega.txt",
+    "NewPath": "gamma.txt",
+    "Status": "renamed",
+    "Hunks": [
+      {
+        "OldStart": 7,
+        "OldLines": 7,
+        "NewStart": 7,
+        "NewLines": 7,
+        "Header": "alpha line 6",
+        "Lines": [
+          {
+            "Kind": "context",
+            "OldNum": 7,
+            "NewNum": 7,
+            "Content": "alpha line 7"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 8,
+            "NewNum": 8,
+            "Content": "alpha line 8"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 9,
+            "NewNum": 9,
+            "Content": "alpha line 9"
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 10,
+            "NewNum": 0,
+            "Content": "alpha line 10"
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 10,
+            "Content": "gamma line ten"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 11,
+            "NewNum": 11,
+            "Content": "alpha line 11"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 12,
+            "NewNum": 12,
+            "Content": "alpha line 12"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 13,
+            "NewNum": 13,
+            "Content": "alpha line 13"
+          }
+        ]
+      }
+    ]
+  }
+]

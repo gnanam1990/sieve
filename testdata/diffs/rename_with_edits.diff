@@ -1,0 +1,16 @@
+diff --git a/omega.txt b/gamma.txt
+similarity index 97%
+rename from omega.txt
+rename to gamma.txt
+index c00b85c..d2a52c5 100644
+--- a/omega.txt
++++ b/gamma.txt
+@@ -7,7 +7,7 @@ alpha line 6
+ alpha line 7
+ alpha line 8
+ alpha line 9
+-alpha line 10
++gamma line ten
+ alpha line 11
+ alpha line 12
+ alpha line 13

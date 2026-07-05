@@ -1,0 +1,8 @@
+[
+  {
+    "OldPath": "alpha.txt",
+    "NewPath": "omega.txt",
+    "Status": "renamed",
+    "Hunks": null
+  }
+]

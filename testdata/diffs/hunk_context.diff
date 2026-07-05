@@ -1,0 +1,13 @@
+diff --git a/code.go b/code.go
+index 1609706..9c5555a 100644
+--- a/code.go
++++ b/code.go
+@@ -2,7 +2,7 @@ package main
+ 
+ func Greet(name string) string {
+ 	prefix := "Hello, "
+-	suffix := "!"
++	suffix := "!!"
+ 	msg := prefix + name + suffix
+ 	return msg
+ }

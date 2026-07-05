@@ -1,0 +1,58 @@
+diff --git a/alpha.txt b/alpha.txt
+index 7843c7f..c00b85c 100644
+--- a/alpha.txt
++++ b/alpha.txt
+@@ -1,6 +1,6 @@
+ alpha line 1
+ alpha line 2
+-alpha line 3
++alpha line three
+ alpha line 4
+ alpha line 5
+ alpha line 6
+@@ -27,14 +27,14 @@ alpha line 26
+ alpha line 27
+ alpha line 28
+ alpha line 29
+-alpha line 30
+-alpha line 31
+-alpha line 32
+-alpha line 33
+-alpha line 34
+-alpha line 35
+-alpha line 36
+-alpha line 37
+-alpha line 38
+-alpha line 39
++alpha line three0
++alpha line three1
++alpha line three2
++alpha line three3
++alpha line three4
++alpha line three5
++alpha line three6
++alpha line three7
++alpha line three8
++alpha line three9
+ alpha line 40
+diff --git a/beta.txt b/beta.txt
+index a3c7529..79d4ad6 100644
+--- a/beta.txt
++++ b/beta.txt
+@@ -2,7 +2,7 @@ beta line 1
+ beta line 2
+ beta line 3
+ beta line 4
+-beta line 5
++beta line five
+ beta line 6
+ beta line 7
+ beta line 8
+@@ -35,6 +35,6 @@ beta line 34
+ beta line 35
+ beta line 36
+ beta line 37
+-beta line 38
++beta line thirty-eight
+ beta line 39
+ beta line 40

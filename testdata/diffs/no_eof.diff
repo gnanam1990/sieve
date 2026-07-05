@@ -1,0 +1,10 @@
+diff --git a/noeof.txt b/noeof.txt
+index e5d488b..00a0ab2 100644
+--- a/noeof.txt
++++ b/noeof.txt
+@@ -1,2 +1,2 @@
+ stable
+-last old
+\ No newline at end of file
++last new
+\ No newline at end of file

@@ -1,0 +1,66 @@
+[
+  {
+    "OldPath": "code.go",
+    "NewPath": "code.go",
+    "Status": "modified",
+    "Hunks": [
+      {
+        "OldStart": 2,
+        "OldLines": 7,
+        "NewStart": 2,
+        "NewLines": 7,
+        "Header": "package main",
+        "Lines": [
+          {
+            "Kind": "context",
+            "OldNum": 2,
+            "NewNum": 2,
+            "Content": ""
+          },
+          {
+            "Kind": "context",
+            "OldNum": 3,
+            "NewNum": 3,
+            "Content": "func Greet(name string) string {"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 4,
+            "NewNum": 4,
+            "Content": "\tprefix := \"Hello, \""
+          },
+          {
+            "Kind": "removed",
+            "OldNum": 5,
+            "NewNum": 0,
+            "Content": "\tsuffix := \"!\""
+          },
+          {
+            "Kind": "added",
+            "OldNum": 0,
+            "NewNum": 5,
+            "Content": "\tsuffix := \"!!\""
+          },
+          {
+            "Kind": "context",
+            "OldNum": 6,
+            "NewNum": 6,
+            "Content": "\tmsg := prefix + name + suffix"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 7,
+            "NewNum": 7,
+            "Content": "\treturn msg"
+          },
+          {
+            "Kind": "context",
+            "OldNum": 8,
+            "NewNum": 8,
+            "Content": "}"
+          }
+        ]
+      }
+    ]
+  }
+]
