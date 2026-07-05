@@ -110,3 +110,130 @@ Fixed by releasing the handler via an explicitly closed channel.
   `-coverpkg=./internal/provider/...` since the shared HTTP/retry code in
   the parent package is exercised by the adapter packages' tests)
 - overall (`-coverpkg=./...`): 90.0% (gate ≥ 80%)
+
+---
+
+# Stage 3 — Noise Gate + Comment Lifecycle
+
+New packages: `internal/gate` (routing), `internal/fingerprint` (content
+anchors), `internal/render` (markdown), `internal/post` (all GitHub writes).
+`internal/gh` gains a `TokenSource` abstraction and a single-shot write
+transport (`Send`); posting is enabled only by `--post`.
+
+## Decisions / smallest-reasonable-choice notes
+
+- **Config schema: `max_comments` → `max_inline_comments`.** Stage 2 reserved
+  `review.max_comments` (1–50, unused). Stage 3's canonical gate config (R2)
+  names the inline cap `max_inline_comments` (1–30), so the reserved key was
+  renamed rather than kept as a dead alias. The env override followed:
+  `SIEVE_MAX_COMMENTS` → `SIEVE_MAX_INLINE_COMMENTS`. `min_confidence` was
+  repurposed from its reserved slot; its default dropped 0.7 → 0.6 to match
+  R2. A committed `.sieve.yml` still using `max_comments` now fails with the
+  unknown-key error — acceptable pre-1.0, and the stage owns the schema.
+- **No `post` config key, by construction.** The strict YAML decoder already
+  hard-errors on any unknown key, so `post:` anywhere is rejected — asserted by
+  `TestPostKeyIsRejected` (R1.1). Posting has exactly one switch: `--post`.
+- **Write transport is single-shot.** `gh.Send` does **not** retry. A review or
+  comment POST is not idempotent; a blind retry risks double-posting. Safety on
+  re-run comes from the dedupe design (locate-by-marker + fingerprint skip), not
+  transport retries. Reads keep the retrying path.
+- **Posting-isolation test, two ways.** The precise check: the GitHub write
+  transport `gh.Send` is only *called* from `internal/post`. The broad net: no
+  package under `internal/` references a mutating HTTP method except
+  `internal/post` (GitHub) and `internal/provider` (the LLM API, which targets
+  the model endpoint, not the GitHub client, and so is outside R1.2's "against
+  the GitHub client" scope). Both in `internal/post/isolation_test.go`.
+- **Fingerprint excludes line numbers, by design (R4).** `fp =
+  sha256(path|side|category|norm(title)|trim(anchorContent))[:16]`. A finding
+  that only drifts to a new position keeps its fingerprint (not re-posted);
+  content edits, title rewrites, and renames change it. A rename yields a new
+  fingerprint (the old one shows as Resolved) — accepted and documented rather
+  than chased with rename detection.
+- **Metadata fps cap eviction (R5).** The block carries only the *current*
+  run's fingerprints (Resolved is derived from the prior block, a one-run
+  window, and is not re-persisted). So the 200-entry cap has no "resolved"
+  entries to evict "oldest-first"; it degenerates to dropping the least-severe
+  current findings, which is the intended size bound. Noted at
+  `internal/gate/meta.go`.
+- **Non-`--post` runs use `prior = nil`.** Cross-run dedupe (Repeated/Resolved)
+  needs the previous walkthrough, which is only fetched when posting. Without
+  `--post`, the gate still runs and its tiering lands in the JSON `Gate` block,
+  but nothing is marked Repeated/Resolved — matching "without `--post`,
+  behavior is exactly Stage 2 plus the gate decisions."
+- **Draft + `--post` (R1.4).** The draft skip happens before the review pass, so
+  a draft PR with `review_drafts:false` never reaches the gate or the poster:
+  skip, notice, exit 0. No separate posting guard needed.
+- **Failure model (R7).** Walkthrough failure → hard error → exit 1 (inline
+  review not attempted). Partial inline failure → `Stats.InlinePostFailed` → exit
+  2, run still succeeds. Wired in `cmd/sieve/main.go`.
+
+## Gates at tag time
+
+`make lint` clean; `make test` green with `-race -shuffle=on` on the local
+toolchain (CI mirrors ubuntu + macos). Offline E2E idempotency + resolved
+goldens green (`internal/review/testdata/walkthrough_run1.golden.md`,
+`walkthrough_run3_resolved.golden.md`).
+
+### Coverage
+
+- `internal/fingerprint`: 100.0% (gate = 100%)
+- `internal/gate`: 93.8% (gate ≥ 90%)
+- `internal/render`: 96.0% (gate ≥ 85%)
+- `internal/post`: 88.2% (gate ≥ 85%)
+- overall (`-coverpkg=./...`): 91.7% (gate ≥ 85%)
+
+## Adversarial spec review
+
+Ran a 6-dimension adversarial review (safety R1, gate R3, fingerprint/meta
+R4–R5, render R5–R6, post/orchestration R6–R7, completeness) with per-finding
+skeptic verification. 168 code reads across the six reviewers; **zero
+confirmed defects or spec violations**.
+
+## Gate 4 — Seeded sandbox recall (calibration) — PENDING LIVE RUN
+
+This gate requires a frontier-model API key and creates a live private repo, so
+it is **not runnable in the offline build**. Everything needed is committed:
+
+- Planted target: `testdata/sandbox/service.go` (10 issues across severities).
+- Plant manifest: `testdata/sandbox/plants.md`.
+- Orchestrator: `scripts/sandbox_recall.sh` (`all` creates repo+PR and reviews
+  with `--post`; `fix` pushes a 2-plant fix and re-reviews). It only ever posts
+  to a private repo it creates under the authenticated user (R1.3).
+
+To run:
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-...      # or OPENROUTER_API_KEY
+scripts/sandbox_recall.sh all            # 4a/4b: create + review --post
+scripts/sandbox_recall.sh fix            # 4d: fix 2 plants, re-review --post
+```
+
+### Calibration report (to fill in after the live run)
+
+- **Recall** (found / missed, per plant): _TBD_ — table keyed by `plants.md` #.
+- **Precision** (non-plant findings judged real vs noise): _TBD_.
+- **Findings-per-severity histogram:** _TBD_.
+- **Confidence distribution:** _TBD_.
+- **Token usage (in / out):** _TBD_ (from `sandbox_review.json` `Stats`).
+- **Permalinks / screenshots:** walkthrough comment, one inline comment, one
+  applied suggestion block: _TBD_.
+- **Resolved-flow evidence (4d):** walkthrough edited in place; plants 5 and 10
+  under Resolved; zero duplicate inlines: _TBD_.
+
+## Gate 5 — Default-tuning proposal (for review, not silently changed)
+
+Current defaults: `min_confidence 0.6`, `inline_min_confidence 0.8`,
+`inline_min_severity major`, `max_inline_comments 10`.
+
+Proposal to revisit **after** the Gate 4 numbers exist:
+
+- If precision on the inline tier is high (few false positives at ≥ 0.8),
+  consider lowering `inline_min_confidence` to `0.75` to lift recall of real
+  major/critical issues.
+- If the walkthrough notes tier is noisy (many low-value sub-0.8 findings),
+  consider raising `min_confidence` to `0.65`.
+- `inline_min_severity major` and `max_inline_comments 10` look right for a
+  single-notification review; hold pending data.
+
+These are **proposals**; the committed defaults are unchanged until the
+calibration run justifies a move.
