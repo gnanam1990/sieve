@@ -80,7 +80,9 @@ func TestSyncEquivalence(t *testing.T) {
 	opts := Options{Repo: "octo/hello", PRNumber: 7, Token: "t", APIBaseURL: srv.URL,
 		Now: func() string { return "syncts" }, Log: discardLog()}
 
-	store.Wipe()
+	if err := store.Wipe(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := Sync(context.Background(), opts); err != nil {
 		t.Fatal(err)
 	}

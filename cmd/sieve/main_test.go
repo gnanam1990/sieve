@@ -307,6 +307,70 @@ func TestMissingKeyWritesStepSummary(t *testing.T) {
 	}
 }
 
+func TestStatsEmptyStore(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	var out, errOut bytes.Buffer
+	if code := run([]string{"stats", "--repo", "o/r"}, &out, &errOut); code != exitOK {
+		t.Fatalf("stats exit %d; stderr:\n%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "CATEGORY") || !strings.Contains(out.String(), "0 runs") {
+		t.Fatalf("stats output wrong:\n%s", out.String())
+	}
+	// --json path.
+	out.Reset()
+	if code := run([]string{"stats", "--repo", "o/r", "--json"}, &out, &errOut); code != exitOK {
+		t.Fatal("stats --json failed")
+	}
+	if !strings.Contains(out.String(), `"Totals"`) {
+		t.Fatalf("stats --json wrong:\n%s", out.String())
+	}
+}
+
+func TestStatsRequiresRepo(t *testing.T) {
+	t.Setenv("GITHUB_REPOSITORY", "")
+	var out, errOut bytes.Buffer
+	if code := run([]string{"stats"}, &out, &errOut); code != exitError {
+		t.Fatalf("stats without repo must error, got %d", code)
+	}
+}
+
+func TestLearningsNoNegatives(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	var out, errOut bytes.Buffer
+	cfg := writeFakeFixture(t) // valid provider config (not reached; store is empty)
+	if code := run([]string{"learnings", "--repo", "o/r", "--config", cfg}, &out, &errOut); code != exitOK {
+		t.Fatalf("learnings exit %d; stderr:\n%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "no new learnings") {
+		t.Fatalf("empty store must yield no learnings:\n%s", out.String())
+	}
+}
+
+func TestSyncCLI(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/graphql"):
+			fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}`)
+		case strings.Contains(r.URL.Path, "/issues/") && strings.HasSuffix(r.URL.Path, "/comments"):
+			fmt.Fprint(w, `[]`) // no walkthrough
+		case strings.HasSuffix(r.URL.Path, "/pulls/1/comments"):
+			fmt.Fprint(w, `[]`) // no inline comments
+		default:
+			fmt.Fprint(w, `{"number":1}`)
+		}
+	}))
+	defer srv.Close()
+	var out, errOut bytes.Buffer
+	code := run([]string{"sync", "--repo", "o/r", "--pr", "1", "--token", "x", "--api-url", srv.URL}, &out, &errOut)
+	if code != exitOK {
+		t.Fatalf("sync exit %d; stderr:\n%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "synced 0 events") {
+		t.Fatalf("sync output wrong:\n%s", out.String())
+	}
+}
+
 func TestReviewErrorExitCode(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

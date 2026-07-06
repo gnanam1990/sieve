@@ -9,9 +9,11 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/gnanam1990/sieve/internal/config"
 	"github.com/gnanam1990/sieve/internal/gh"
+	"github.com/gnanam1990/sieve/internal/memory"
 	"github.com/gnanam1990/sieve/internal/review"
 	"github.com/gnanam1990/sieve/internal/version"
 )
@@ -34,6 +36,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "review":
 		return runReview(args[1:], stdout, stderr)
+	case "sync":
+		return runSync(args[1:], stdout, stderr)
+	case "learnings":
+		return runLearnings(args[1:], stdout, stderr)
+	case "stats":
+		return runStats(args[1:], stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, version.Info())
 		return exitOK
@@ -166,6 +174,129 @@ func writeStepSummary(md string) {
 	_, _ = io.WriteString(f, md)
 }
 
+// runSync rebuilds the local outcome store for a PR from GitHub.
+func runSync(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	repo := fs.String("repo", "", "repository as owner/name (default: $GITHUB_REPOSITORY)")
+	pr := fs.Int("pr", 0, "pull request number")
+	token := fs.String("token", "", "GitHub token (default: $GITHUB_TOKEN)")
+	debug := fs.Bool("debug", false, "debug logging")
+	apiURL := fs.String("api-url", "", "GitHub API base URL override (testing)")
+	if err := fs.Parse(args); err != nil {
+		return exitError
+	}
+	logger := newLogger(stderr, *debug)
+	resolveRepoPR(repo, pr, token)
+	if *repo == "" || *pr == 0 {
+		fmt.Fprintln(stderr, "error: sync needs --repo and --pr")
+		return exitError
+	}
+	n, err := review.Sync(context.Background(), review.Options{Repo: *repo, PRNumber: *pr, Token: *token, APIBaseURL: *apiURL, Log: logger})
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	fmt.Fprintf(stdout, "synced %d events from GitHub\n", n)
+	return exitOK
+}
+
+// runLearnings drafts repository rules from negative outcomes and updates
+// .sieve/learnings.md in the worktree (never commits).
+func runLearnings(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("learnings", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	repo := fs.String("repo", "", "repository as owner/name (default: $GITHUB_REPOSITORY)")
+	cfgPath := fs.String("config", config.DefaultFile, "path to config file")
+	debug := fs.Bool("debug", false, "debug logging")
+	if err := fs.Parse(args); err != nil {
+		return exitError
+	}
+	logger := newLogger(stderr, *debug)
+	if *repo == "" {
+		*repo = gh.RepoFromEnv()
+	}
+	if *repo == "" {
+		fmt.Fprintln(stderr, "error: learnings needs --repo")
+		return exitError
+	}
+	diff, err := review.Learnings(context.Background(), review.Options{Repo: *repo, ConfigPath: *cfgPath, Log: logger})
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	if diff == "" {
+		fmt.Fprintln(stdout, "no new learnings")
+		return exitOK
+	}
+	fmt.Fprint(stdout, diff)
+	fmt.Fprintf(stderr, "\nupdated %s — review and commit it yourself (sieve never commits)\n", review.LearningsFile)
+	return exitOK
+}
+
+// runStats renders the local outcome store as a table (or JSON).
+func runStats(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("stats", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	repo := fs.String("repo", "", "repository as owner/name (default: $GITHUB_REPOSITORY)")
+	jsonOut := fs.Bool("json", false, "emit JSON instead of a table")
+	debug := fs.Bool("debug", false, "debug logging")
+	if err := fs.Parse(args); err != nil {
+		return exitError
+	}
+	logger := newLogger(stderr, *debug)
+	if *repo == "" {
+		*repo = gh.RepoFromEnv()
+	}
+	owner, name, ok := strings.Cut(*repo, "/")
+	if !ok || owner == "" || name == "" {
+		fmt.Fprintln(stderr, "error: stats needs --repo owner/name")
+		return exitError
+	}
+	store := memory.Open("github.com", owner, name, logger)
+	events, corrupt, err := store.Read()
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	if corrupt > 0 {
+		fmt.Fprintf(stderr, "warning: skipped %d corrupt event line(s)\n", corrupt)
+	}
+	stats := memory.Aggregate(events)
+	totals := memory.Sum(events)
+	if *jsonOut {
+		if err := memory.WriteStatsJSON(stdout, stats, totals); err != nil {
+			fmt.Fprintln(stderr, "error:", err)
+			return exitError
+		}
+		return exitOK
+	}
+	memory.WriteStats(stdout, stats, totals)
+	return exitOK
+}
+
+// newLogger builds the stderr slog logger at the requested level.
+func newLogger(stderr io.Writer, debug bool) *slog.Logger {
+	level := slog.LevelInfo
+	if debug {
+		level = slog.LevelDebug
+	}
+	return slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
+}
+
+// resolveRepoPR fills repo/pr/token from the environment when unset.
+func resolveRepoPR(repo *string, pr *int, token *string) {
+	if *repo == "" {
+		*repo = gh.RepoFromEnv()
+	}
+	if *pr == 0 {
+		*pr = gh.PRNumberFromEnv()
+	}
+	if *token == "" {
+		*token = os.Getenv("GITHUB_TOKEN")
+	}
+}
+
 func usage(w io.Writer) {
 	fmt.Fprint(w, `sieve — zero-infra PR reviewer
 
@@ -173,6 +304,9 @@ usage:
   sieve review --repo owner/name --pr N             LLM review, findings on stdout (read-only)
   sieve review --repo owner/name --pr N --post      review AND post the results to the PR
   sieve review --repo owner/name --pr N --dry-run   context dump only, no LLM calls
+  sieve sync --repo owner/name --pr N               rebuild the local outcome store from GitHub
+  sieve learnings --repo owner/name                 draft repo rules from outcomes -> .sieve/learnings.md
+  sieve stats --repo owner/name [--json]            per-category addressed-rate + reactions
   sieve version                                     print version
 
 review flags:
@@ -183,6 +317,7 @@ review flags:
   --dry-run    skip the LLM pass; no GitHub writes ever happen either way
   --post       post the walkthrough + inline review to the PR — the ONLY switch
                that enables writes; no config key can turn posting on
+  --full       force a full re-review (disable incremental delta review)
   --json-only  suppress the stderr summary
   --debug      debug logging
 

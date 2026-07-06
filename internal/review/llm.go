@@ -14,6 +14,7 @@ import (
 	"github.com/gnanam1990/sieve/internal/findings"
 	"github.com/gnanam1990/sieve/internal/gh"
 	"github.com/gnanam1990/sieve/internal/incremental"
+	"github.com/gnanam1990/sieve/internal/learnings"
 	"github.com/gnanam1990/sieve/internal/prompt"
 	"github.com/gnanam1990/sieve/internal/provider"
 	"github.com/gnanam1990/sieve/internal/provider/anthropic"
@@ -61,6 +62,10 @@ func reviewPass(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg c
 	system, err := prompt.System()
 	if err != nil {
 		return err
+	}
+	if inj, n := fetchLearnings(ctx, client, rc, opts); inj != "" {
+		system += "\n\n" + inj
+		rc.learningsCount = n
 	}
 
 	input, sent := buildPromptInput(ctx, rc, client, cfg, opts, plan)
@@ -147,6 +152,22 @@ func buildPromptInput(ctx context.Context, rc *ReviewContext, client *gh.Client,
 		in.Files = append(in.Files, f)
 	}
 	return in, sent
+}
+
+// fetchLearnings loads .sieve/learnings.md at the PR head and returns the
+// injection text (capped at 8 KB) and the active-rule count. Absent or
+// unreadable learnings are simply skipped.
+func fetchLearnings(ctx context.Context, client *gh.Client, rc *ReviewContext, opts Options) (string, int) {
+	owner, name, _ := strings.Cut(rc.Repo, "/")
+	content, err := client.GetContents(ctx, owner, name, ".sieve/learnings.md", rc.HeadSHA)
+	if err != nil {
+		return "", 0 // no learnings file (common); not an error
+	}
+	text, count := learnings.InjectionText(string(content))
+	if count > 0 {
+		opts.Log.Debug("applying repository learnings", "rules", count)
+	}
+	return text, count
 }
 
 // estimateTokensSaved approximates the input tokens a delta run avoided: the

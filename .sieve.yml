@@ -24,6 +24,8 @@ review:
   max_file_content_kb: 64     # per-file cap for content attachment
   concurrency: 3              # parallel provider calls (1-8)
   review_drafts: false        # draft PRs are skipped unless true
+  incremental: true           # delta re-review of only changed files (--full forces a full review)
+  calibration: false          # scale confidence by the local addressed-rate (opt-in, transparent)
   # NOTE: there is no `post` key. Posting is enabled ONLY by the --post flag,
   # never by config, so a committed .sieve.yml can never turn writes on.
 

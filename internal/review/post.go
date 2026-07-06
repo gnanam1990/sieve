@@ -66,6 +66,9 @@ func planReview(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg c
 // carry-forward and reactions). A partial inline failure is exit 2 but still
 // writes the walkthrough; a walkthrough failure is exit 1.
 func gateAndPost(ctx context.Context, rc *ReviewContext, cfg config.Config, opts Options, kept []diff.FileDiff, plan incremental.Plan, prior []gate.CompactFinding, poster *post.Poster, loc post.Locator) error {
+	if cfg.Review.Calibration {
+		applyCalibration(rc, opts)
+	}
 	idx := fingerprint.NewContentIndex(kept)
 	priorReviewed := plan.PriorForReviewedPaths(prior)
 	res := gate.Route(rc.Findings, idx, priorReviewed, cfg.Review)

@@ -67,12 +67,24 @@ type ReviewContext struct {
 	HeadSHA   string
 	Draft     bool
 	Truncated bool
-	Files     []FileEntry
-	Findings  []findings.Finding
-	Gate      *gate.GateResult `json:",omitempty"` // tier routing + drop/demote counters + fingerprints
-	Stats     Stats
+	Files       []FileEntry
+	Findings    []findings.Finding
+	Gate        *gate.GateResult    `json:",omitempty"` // tier routing + drop/demote counters + fingerprints
+	Calibration []CalibrationRecord `json:",omitempty"` // raw vs calibrated confidence (review.calibration)
+	Stats       Stats
 
 	learningsCount int // repository rules applied to the prompt (footer)
+}
+
+// CalibrationRecord captures one finding's confidence before and after runtime
+// calibration, for transparency in the JSON output.
+type CalibrationRecord struct {
+	Path       string
+	Line       int
+	Category   string
+	Raw        float64
+	Calibrated float64
+	Factor     float64
 }
 
 // Options configures a run.

@@ -115,6 +115,35 @@ func TestUnwritableStoreIsBestEffort(t *testing.T) {
 	}
 }
 
+func TestOpenNoDataDir(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("HOME", "")
+	s := Open("github.com", "o", "r", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if s.Path != "" {
+		t.Fatalf("unresolvable data dir must yield a no-op store, got %q", s.Path)
+	}
+}
+
+func TestRewriteRenameError(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "sub")
+	if err := os.Mkdir(target, 0o755); err != nil { // Path is a directory
+		t.Fatal(err)
+	}
+	s := &Store{Path: target, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s.Rewrite([]Event{{Type: TypeFinding, Fp: "x"}}) // rename tmp -> dir fails; warns, no panic
+	if _, err := os.Stat(target); err != nil {
+		t.Fatal("target directory should be untouched")
+	}
+}
+
+func TestReadErrorOnDirectory(t *testing.T) {
+	s := &Store{Path: t.TempDir(), log: slog.New(slog.NewTextHandler(io.Discard, nil))} // Path is a dir
+	if _, _, err := s.Read(); err == nil {
+		t.Fatal("reading a directory as the store must error")
+	}
+}
+
 func TestDirRespectsXDG(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "/custom/data")
 	d, err := Dir("github.com", "o", "r")

@@ -1,0 +1,21 @@
+You write repository-specific review rules for a code-review tool.
+A cluster of findings was repeatedly rejected by maintainers (thumbs-down or dismissed).
+Draft ONE rule that will SUPPRESS that class of finding in future reviews.
+
+Requirements:
+- Suppressive only: it tells the reviewer what NOT to flag, never what to add.
+- Imperative, one sentence, at most 200 characters.
+- Generalized: no line numbers, no PR or issue references, no file paths, no verbatim code.
+- Specific enough to be actionable for this category and area.
+
+Respond with a single JSON object and nothing else: {"rule": "<the rule>"}
+
+---
+
+Category: style
+Area: internal/x
+Rejected findings (titles):
+- Prefer errors.Is over ==
+- Prefer errors.Is over equality
+
+Draft one suppressive rule generalizing why this whole class should not be flagged here.
