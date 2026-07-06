@@ -237,3 +237,138 @@ Proposal to revisit **after** the Gate 4 numbers exist:
 
 These are **proposals**; the committed defaults are unchanged until the
 calibration run justifies a move.
+
+---
+
+# Stage 4 — GitHub Action Packaging + Release Engineering
+
+Deliverables: `.goreleaser.yaml`, `action.yml` (composite), `install.sh`,
+`.github/workflows/release.yml` + `action-smoke.yml`, `docs/forks.md`,
+action-first README. Sieve code changes limited to R1 (version) and R4 (fork
+safety); everything else is packaging.
+
+## Prerequisite deviation (important)
+
+The stage prerequisite is "stage-03 tagged and merged to main". At the time of
+building, the actual state was: `origin/main` at the Stage 1 tip, stage-02
+pushed (PR #1 open, unmerged), **stage-03 local-only and untagged**. The whole
+chain (stage-02 → stage-03 → stage-04) is unmerged. Stage 4 was therefore built
+on a branch off `stage-03-noise-gate-posting` (where the code lives) and kept
+local per the standing "push/PR/tag only on explicit request" rule.
+
+Consequence: the release-engineering **live gates cannot run until the chain is
+merged to main and pushed**, because the release workflow triggers on `v*` tags
+pushed to the repo and the Action downloads from GitHub *releases*. All configs
+are authored and **validated offline** (see below); the live gates (2/3/4 and
+parts of 5) are pending the merge + push + a model API key.
+
+## Decisions / smallest-reasonable-choice notes
+
+- **goreleaser `brews` → `homebrew_casks`.** The spec (R5) says a `brews` block,
+  but goreleaser 2.10+ deprecated `brews` (and `homebrew_casks.binary`) —
+  `goreleaser check` fails on deprecated keys. Migrated to a binary `homebrew_casks`
+  entry (same Homebrew install-path intent) with a post-install hook that strips
+  the Gatekeeper quarantine flag (the binary is unsigned; cosign is backlog).
+- **Provider config injection.** sieve reads provider type/base_url/api_key_env
+  only from a config file (no env override, and adding one is outside the "R1/R4
+  only" sieve-change budget). So `action.yml` **appends** a provider block to
+  `config_path` only when the file has none — a user's own `provider:` block (and
+  all review/gate settings) always wins. Model, type, base_url, api_key_env come
+  from inputs; the key is read from the env var named by `api_key_env_name`.
+- **Secrets are never inputs.** Every step maps `${{ inputs.* }}` into `env:` and
+  references `$VARS` in bash (no `${{ }}` interpolation into shell — injection
+  safety), and the model key is only ever an env var, never an input (inputs are
+  logged). Documented inline in `action.yml`.
+- **Floating major tag.** `scripts/move_major_tag.sh` derives `v0` from the
+  release tag, pins the released version into a `VERSION` file, force-moves `v0`,
+  and pushes. `action.yml` resolves its version from that `VERSION` file at the
+  pinned ref, so `@v0` always downloads the matching binary. The commit is
+  guarded (`git diff --cached --quiet || git commit`) so the tag still moves even
+  when VERSION is already the released value (the case on the first rc, whose
+  commit already carries `VERSION=v0.0.9-rc1`). By convention a major tag tracks
+  the latest **stable** release, so the script **skips prereleases by default**;
+  `release.yml` sets `MOVE_MAJOR_ON_PRERELEASE=true` for the v0 bootstrap so
+  gates 2/3 can exercise `@v0` with the rc — remove that override after the first
+  stable `v0.x.0`.
+- **Exit-code policy in the Action.** sieve exit 2 (partial) is surfaced as a
+  warning and the job stays green unless `fail_on_partial: true` — a truncated
+  diff must not break someone's CI.
+- **Version internal vs tag.** goreleaser's `{{.Version}}` drops the leading `v`
+  (tag `v0.0.9-rc1` → binary reports `sieve 0.0.9-rc1`); the release tag and the
+  `VERSION` file keep the `v`. The Action downloads by tag name (with `v`), the
+  walkthrough footer shows the `v`-less version. Both are internally consistent.
+- **No LICENSE yet.** sieve is a private repo; a LICENSE was not added
+  unilaterally. The archive `files:` and cask license are TODO'd — pick a license
+  before going public.
+
+## Offline validation (done)
+
+- `go test ./... -race` green; `golangci-lint` clean; coverage 92.1% overall
+  (all per-package gates met).
+- `shellcheck install.sh scripts/*.sh` — clean.
+- `actionlint` — clean (all workflows).
+- `goreleaser check` — valid.
+- `goreleaser release --snapshot --clean` — builds all four binaries
+  (linux/darwin × amd64/arm64) with the R1 ldflags, produces tar.gz archives,
+  **raw binaries named `sieve_<os>_<arch>`**, and `checksums.txt` (sha256). A
+  built binary reports a real stamped version via `sieve version`.
+- `go install ./cmd/sieve` produces a `sieve` binary; module path
+  `github.com/gnanam1990/sieve/cmd/sieve` is correct (the `@latest` form needs a
+  published tag).
+
+## Adversarial security review (4 findings, all fixed)
+
+A 4-dimension adversarial review (action security, fork safety, release
+pipeline, install/completeness) with per-finding skeptic verification surfaced
+four confirmed defects — all fixed and regression-tested:
+
+1. **critical — `move_major_tag.sh`:** an unconditional `git commit` aborted the
+   release job under `set -e` when VERSION was already the released tag (the
+   first-rc case), so `v0` never moved and `@v0` broke. Fixed: guard the commit,
+   always move + push the tag. Reproduced the failure and the fix in a throwaway
+   repo.
+2. **major — `internal/gh/client.go`:** `Event.Found` keyed on `base != ""`,
+   which is set by the `repository` block present in *every* event — so a
+   push/workflow_dispatch/schedule event was misclassified as a fork and a
+   legitimate same-repo run was skipped with a bogus notice. Fixed: `Found` now
+   requires an actual `pull_request` object (pointer non-nil).
+   `TestNonPullRequestEventsAreNotForks` covers it.
+3. **major — `move_major_tag.sh`:** moved the "stable" `v0` onto a *prerelease*
+   binary unconditionally. Fixed: skip prereleases by default; the bootstrap
+   override (above) is explicit and time-boxed.
+4. **minor — `install.sh` + `action.yml`:** the checksum `grep` under
+   `set -e`/pipefail aborted before the friendly "no checksum entry" message.
+   Fixed with `|| true` on the substitution so the explicit diagnostic runs.
+
+## Homebrew tap — one-time setup (R5, do before the first stable release)
+
+1. Create a public repo `gnanam1990/homebrew-tap` (empty is fine; goreleaser
+   writes `Casks/sieve.rb`).
+2. Create a Personal Access Token (classic: `repo`, or fine-grained: contents
+   read/write on `homebrew-tap`) and add it to the **sieve** repo as the secret
+   `HOMEBREW_TAP_TOKEN` (the default `GITHUB_TOKEN` cannot push to another repo).
+3. On the next **stable** (non-rc) tag, goreleaser pushes the cask;
+   `brew install gnanam1990/tap/sieve` then works. Prereleases skip the tap
+   (`skip_upload: auto`), so the rc gate needs neither the tap nor the token.
+
+## Live gates — PENDING (need merge + push + key)
+
+- **Gate 2 (rc release):** after merging the chain to main, tag `v0.0.9-rc1`;
+  `release.yml` runs tests then goreleaser, publishes 4 binaries + raw binaries +
+  `checksums.txt`, and moves `v0`. Evidence (release URL): _TBD_.
+- **Gate 3 (end-to-end action):** a workflow using `gnanam1990/sieve@v0` with
+  `post: true` reviews a real PR on a hosted runner. Permalink + step summary:
+  _TBD_. (`.github/workflows/action-smoke.yml` provides a `post: false`
+  local-checkout smoke via `workflow_dispatch` for a designated PR.)
+- **Gate 4 (fork path):** a fork PR into the sandbox exercises the clean-notice
+  exit-0 path. The logic is unit-tested offline (`internal/gh` fork detection +
+  cmd `TestForkPRSkipsCleanly`); live evidence: _TBD_.
+- **Gate 5 (install paths):** `install.sh` and `go install` verified live once a
+  release exists (offline: shellcheck-clean, module path correct); Homebrew cask
+  generated by goreleaser (tap publish deferred per above).
+
+## Default-tuning / backlog carried forward
+
+Stage 3's calibration (Gate 4 there) is still pending a live model run; the
+default-tuning proposal in the Stage 3 notes stands. Stage 4 adds no new
+gate-tuning surface.

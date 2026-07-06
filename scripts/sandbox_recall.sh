@@ -152,7 +152,7 @@ fix_two_plants() {
 
 main() {
   case "${1:-all}" in
-    all)    build_sieve; local n; n="$(create_repo_and_pr)"; run_review ;;
+    all)    build_sieve; create_repo_and_pr >/dev/null; run_review ;;
     create) create_repo_and_pr ;;
     review) build_sieve; run_review ;;
     fix)    build_sieve; fix_two_plants ;;

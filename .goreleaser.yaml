@@ -1,0 +1,103 @@
+# goreleaser config for sieve — https://goreleaser.com
+# Produces static binaries + tar.gz archives + raw binaries + checksums for
+# darwin/linux × amd64/arm64 on every v* tag. The composite action downloads
+# the RAW binaries (sieve_<os>_<arch>), not the archives.
+version: 2
+
+project_name: sieve
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: sieve
+    main: ./cmd/sieve
+    binary: sieve
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/gnanam1990/sieve/internal/version.Version={{ .Version }}
+      - -X github.com/gnanam1990/sieve/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/gnanam1990/sieve/internal/version.Date={{ .Date }}
+
+archives:
+  # tar.gz per platform (used by Homebrew and humans).
+  - id: targz
+    ids: [sieve]
+    formats: [tar.gz]
+    name_template: "sieve_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      # TODO(pre-1.0): add a LICENSE file and re-include it here + set the cask
+      # license. sieve is a private repo today; choose a license before going public.
+  # Raw binary uploads named sieve_<os>_<arch> — what action.yml downloads.
+  - id: rawbin
+    ids: [sieve]
+    formats: [binary]
+    name_template: "sieve_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# TODO(backlog): cosign / sigstore signing of checksums.txt and binaries.
+# Deliberately not done in stage 4 (see NON-GOALS); tracked for a later stage.
+# signs:
+#   - cmd: cosign
+#     ...
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Performance
+      regexp: '^.*?perf(\(.+\))??!?:.+$'
+      order: 2
+    - title: Refactors
+      regexp: '^.*?refactor(\(.+\))??!?:.+$'
+      order: 3
+  filters:
+    exclude:
+      - '^chore'
+      - '^docs'
+      - '^test'
+      - '^ci'
+      - '^build'
+      - '^style'
+
+release:
+  prerelease: auto # tags like v0.0.9-rc1 are published as prereleases
+
+# Homebrew tap (goreleaser deprecated `brews` -> `homebrew_casks` in v2.10;
+# a binary cask is the current CLI install path). One-time tap setup is in
+# STAGE_NOTES. skip_upload: auto means an rc/prerelease never needs the tap.
+homebrew_casks:
+  - name: sieve
+    ids: [targz]
+    repository:
+      owner: gnanam1990
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    skip_upload: auto
+    homepage: "https://github.com/gnanam1990/sieve"
+    description: "Zero-infra, provider-agnostic PR reviewer"
+    # Unsigned binary: strip the Gatekeeper quarantine flag on install so
+    # `brew install` doesn't leave it blocked. (cosign/notarization is backlog.)
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/sieve"]
+          end

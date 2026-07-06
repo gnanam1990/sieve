@@ -1,25 +1,80 @@
 # sieve
 
-A zero-infra, provider-agnostic PR reviewer. Single Go binary, no server, no
-containers — runs as a CLI or (later) a GitHub Action with your own API keys.
+A zero-infra, provider-agnostic PR reviewer. One static Go binary — no server,
+no container, no `docker pull`. Runs as a **GitHub Action** or a CLI, with your
+own model API key.
 
-**Stage 3 status:** review **and post**. sieve fetches a PR, parses its diff
-into an exact line-anchor model, applies noise filters, sends batched prompts
-to the LLM provider of your choice, anchor-validates every finding against the
-real diff, routes survivors through a two-tier noise gate, and — only when you
-pass `--post` — writes them to the PR as one editable walkthrough comment plus
-a batched inline review. Re-runs edit in place and never duplicate comments.
-**Writes require the `--post` flag; no config key can enable them.**
+sieve fetches a PR, parses its diff into an exact line-anchor model, filters
+noise, sends batched prompts to the LLM provider of your choice, anchor-validates
+every finding against the real diff, routes survivors through a two-tier noise
+gate, and posts them as one editable walkthrough comment plus a batched inline
+review. Re-runs edit in place and never duplicate comments. **Writes require an
+explicit switch (`--post`, or `post: true` in the Action); no config key can
+enable them.**
 
-## Install
+## Quickstart — GitHub Action (≈ 5 minutes)
+
+1. Add your model key as a repo secret named **`SIEVE_API_KEY`**
+   (*Settings → Secrets and variables → Actions*).
+2. Commit `.github/workflows/sieve.yml`:
+
+```yaml
+name: sieve
+on: { pull_request: { types: [opened, synchronize, reopened, ready_for_review] } }
+permissions: { pull-requests: write, contents: read }
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: gnanam1990/sieve@v0
+        with: { provider: anthropic, model: claude-sonnet-4-6 }
+        env:
+          SIEVE_API_KEY: ${{ secrets.SIEVE_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+```
+
+That's it — open a PR and sieve reviews it. The action downloads the pinned,
+checksum-verified `sieve` binary for the runner and runs `sieve review --post`.
+
+- **Fork PRs** are detected and skipped cleanly (secrets are unavailable to
+  them) — see [docs/forks.md](docs/forks.md). Same-repo PRs are the supported
+  surface.
+- **Exit code 2** (a truncated diff or a failed inline post) is a warning, not a
+  CI failure, unless you set `fail_on_partial: true`.
+- The API key is read from the env var named by `api_key_env_name` (default
+  `SIEVE_API_KEY`) — it is **never** an action input, because inputs are echoed
+  to logs.
+
+### Action inputs
+
+| Input | Default | Notes |
+|---|---|---|
+| `provider` | `anthropic` | `anthropic` \| `openai-compat` \| `fake` |
+| `model` | — | required (except `fake`), e.g. `claude-sonnet-4-6` |
+| `base_url` | — | required iff `provider: openai-compat` |
+| `api_key_env_name` | `SIEVE_API_KEY` | name of the env var holding the key (not the key) |
+| `config_path` | `.sieve.yml` | your review-scope + gate config; a provider block is appended only if it has none |
+| `post` | `true` | `false` = review without writing |
+| `version` | *(VERSION file)* | sieve release to download; `@v0` resolves the matching binary |
+| `fail_on_partial` | `false` | fail the job on exit 2 |
+
+## Install the CLI
 
 ```sh
+# Homebrew
+brew install gnanam1990/tap/sieve
+
+# curl installer (downloads + checksum-verifies the latest release binary)
+curl -fsSL https://raw.githubusercontent.com/gnanam1990/sieve/v0/install.sh | bash
+
+# Go
 go install github.com/gnanam1990/sieve/cmd/sieve@latest
 ```
 
-Or from a checkout: `make build`. Requires Go 1.23+. No CGo.
+Or from a checkout: `make build`. Requires Go 1.23+. No CGo. `sieve version`
+prints the build version, commit, date, Go version, and platform.
 
-## Quickstart
+## Quickstart — CLI
 
 ```sh
 export GITHUB_TOKEN=ghp_...        # or --token
@@ -29,7 +84,8 @@ provider:
   type: anthropic
   model: claude-sonnet-5
 EOF
-sieve review --repo owner/name --pr 123
+sieve review --repo owner/name --pr 123          # review, findings on stdout
+sieve review --repo owner/name --pr 123 --post   # …and post to the PR
 ```
 
 - **stdout** — deterministic JSON `ReviewContext` including `Findings` and the
@@ -40,6 +96,13 @@ sieve review --repo owner/name --pr 123
 `--json-only` suppresses the stderr summary (combinable with `--post`). Exit
 codes: `0` ok · `2` partial (truncated context, a failed batch, or a failed
 inline post) · `1` error.
+
+## FAQ: is there a Docker image?
+
+No — and that's the point. sieve is a single static binary with no runtime
+dependencies; the Action downloads it directly (a few MB, checksum-verified) and
+runs it. A container would add a `docker pull`, a registry, and image-scanning
+overhead to buy nothing. Windows builds and cosign signing are on the backlog.
 
 Draft PRs are skipped (exit 0, empty findings) unless `review.review_drafts: true`
 — this holds **even with `--post`**: a draft is never written to.
