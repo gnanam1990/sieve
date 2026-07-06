@@ -213,9 +213,19 @@ is served.
 - **Graceful shutdown.** `systemctl stop sieve` (SIGTERM) stops accepting new
   webhooks, lets in-flight reviews finish (up to 10 min), and flushes queue
   state. Un-started jobs replay on the next start.
-- **Capacity.** The workload is I/O-wait (network round-trips to GitHub and the
-  model), so one small VPS handles many repos on `workers: 2–4`. Concrete
-  throughput/latency numbers are _measured at the live-validation batch_.
+- **Capacity (measured 2026-07-06 on a local macOS dev machine, `workers: 2`,
+  model served by Ollama).** The workload is I/O-wait (network round-trips to
+  GitHub and the model), so a small VPS is the right shape. Observed numbers:
+  - Daemon startup validation: <1 s from process start to `ready`.
+  - End-to-end webhook → posted review: ~28 s for a small PR with the `judge`
+    pipeline (generator + judge) via Ollama.
+  - Crash replay: a `kill -9` mid-queue, immediate restart, and the pending job
+    finished in ~9 s (only the newest head was replayed; older coalesced heads
+    were dropped).
+  - Queue coalescing: two `synchronize` webhooks delivered within 50 ms produced
+    one pending job behind the in-flight run; `queue_depth` never exceeded 1.
+  - A single node with `workers: 2–4` is expected to handle many repos; the
+    bottleneck is model latency, not CPU.
 
 ## Non-goals
 

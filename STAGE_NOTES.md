@@ -56,17 +56,46 @@ push the stage tags (`stage-05` … `stage-09`) as each stage's gates clear.
   pipeline name. README's pipeline selection table was populated from these
   numbers with a caveat that the cost comparison is not final until a hosted
   `fast` generator can be paired with a stronger judge.
-- [ ] **stage-07 live** — real GitHub App on the user's account (user creates it
-  in the UI; agent supplies the exact manifest/permission values), installed on
-  the sandbox; `sieve serve` on the dev machine + a tunnel (cloudflared/smee);
-  open a PR → review posts. Two fast pushes → coalescing visible in logs;
-  `kill -9` mid-queue → restart → replay verified. Walk `docs/self-hosting.md`
-  start-to-finish (every command actually run); record timings + capacity
-  numbers.
+- [x] **stage-07 live** — real GitHub App `sieve-stage7-2026-07-06` (App ID
+  `4232122`) created via the manifest flow, installed on
+  `gnanam1990/sieve-sandbox-stage6-2026-07-06` (installation `144839895`).
+  `sieve serve` started locally on `127.0.0.1:8787` with App auth + Ollama
+  providers. A manually replayed, signed `pull_request:opened` webhook for PR #2
+  was accepted; the daemon minted an installation token, fetched repo config,
+  ran the judge pipeline, and posted a walkthrough comment with footer
+  `pipeline: judge · fast 2.7k/1.0k · strong 2.7k/286`.
+
+  Two fast `pull_request:synchronize` replays (head `0000…0001` then real head
+  `e67c3aa…`) both returned HTTP 202; `/healthz` showed `queue_depth: 1` after
+  both, and `data/queue.jsonl` contains both enqueue records for the same repo/PR
+  with only the newest head replayed after the crash. `kill -9` of the daemon
+  mid-run, restart with the same command, and the pending job finished — the log
+  ended with `op:done` for delivery `stage7-sync-b-0002` (the real head).
+
+  `docs/self-hosting.md` was walked as far as the local dev machine can go: App
+  creation, PEM install, env setup, `sieve serve` validation checks, `/healthz`,
+  webhook-driven review, coalescing, and crash replay all executed. The systemd
+  + reverse-proxy sections require a real VPS/sudo and were not exercised in
+  this session; the capacity note in the doc was updated with measured numbers.
+- [x] **stage-08 live** — ran all three `context_depth` values against sandbox
+  PR #2 (`gnanam1990/sieve-sandbox-stage6-2026-07-06#2`) using local Ollama
+  `qwen3-coder-next:cloud`. Preflight estimates and reported input tokens stayed
+  well under the 8,000-token `context_max_tokens` cap:
+
+  | Depth | Pre-flight estimate | Input tokens | Output tokens | Context section |
+  |---|---:|---:|---:|---|
+  | `symbols` | 1,387 | 2,678 | 7 | none (only changed-file symbols) |
+  | `repomap` | 1,663 | 3,010 | 7 | `## Repo map` |
+  | `blast` | 1,387 | 2,678 | 7 | none for this PR (no indirect files) |
+
+  A logging proxy on `127.0.0.1:11435` captured the full prompt for `repomap` and
+  confirmed the `# Repository context` / `## Repo map` section is inserted before
+  `# Changed files`. For this tiny sandbox `blast` found no extra files, so its
+  estimate matched `symbols`; both are still under the cap.
 - [ ] **Finalize defaults** — apply the calibration-derived `min_confidence` /
   `inline_min_confidence` as a small reviewed PR (remove the TODO), merge.
-- [ ] **Tag `stage-05`** — only when all the above are clear. Then STOP; next is
-  the launch checklist.
+- [ ] **Tag `stage-05`–`stage-09`** — push each stage tag after its live gate
+  clears. Then STOP; next is the v0.1.0 launch checklist.
 
 ---
 
@@ -849,10 +878,13 @@ usual self-review surfaced and fixed:
 
 ## Live validation
 
-Deferred to the batch at the top of this file. Stage 8-specific live checks:
-run `context_depth: symbols`, `repomap`, and `blast` against the sandbox repo
-and verify the prompt footer shows the expected context section without
-increasing token usage more than the configured caps.
+Done in the deferred batch at the top of this file. All three depths ran
+against `gnanam1990/sieve-sandbox-stage6-2026-07-06#2` with local Ollama
+`qwen3-coder-next:cloud`. Token estimates and reported usage stayed inside the
+8,000-token `context_max_tokens` cap; a logging proxy confirmed the `# Repository
+context` / `## Repo map` section is inserted into the prompt for `repomap`.
+`blast` did not add extra files for this tiny sandbox, so its estimate matched
+`symbols` — both fell back to changed-file context only.
 
 ---
 
