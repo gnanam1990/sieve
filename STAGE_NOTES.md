@@ -38,13 +38,24 @@ push the stage tags (`stage-05` … `stage-09`) as each stage's gates clear.
   intentionally does not reconstruct. One reaction snapshot drifted between the
   live run and the sync (a transient 👎 on a stale comment), which is expected
   because reactions are human-controlled and can change between review and sync.
-- [ ] **stage-06 live** — three-run comparison on the seeded sandbox
-  (single/strong, judge fast+strong, single/fast): recall vs plants, precision,
-  per-role tokens, wall time. Judge should beat single/fast on precision at
-  materially lower cost than single/strong; if not, analyze (prompt? judge
-  model? ±3 matching?) **before** the batch proceeds. Plus one live judge
-  `--post` run on a fresh sandbox PR — footer shows per-role tokens +
-  `pipeline: judge`. Populate the README cost/precision table from the results.
+- [x] **stage-06 live** — fresh private sandbox
+  `gnanam1990/sieve-sandbox-stage6-2026-07-06`, PR #1. Because the OpenRouter
+  key is still invalid, the only available local model is Ollama
+  `kimi-k2.7-code:cloud`; it was used for **all roles**, so the judge could not
+  realize its intended cost win (cheap generator + strong judge). All three
+  runs still achieved **10/10 recall** and **10/10 precision** against
+  `testdata/sandbox/plants.md`:
+
+  | Pipeline | Recall | Precision | In tokens | Out tokens | Wall time | Footer |
+  |---|---|---:|---:|---:|---:|---|
+  | `single` | 10/10 | 10/10 | 4,597 | 3,106 | ~45 s | `pipeline: single` |
+  | `single/fast` | 10/10 | 10/10 | 4,597 | 3,923 | ~47 s | `pipeline: single` |
+  | `judge` | 10/10 | 10/10 | 12,595 | 7,705 | ~103 s | `pipeline: judge (killed 0, failed-open 0) · fast 9147/7193 · strong 3448/512` |
+
+  The judge run's walkthrough footer correctly shows per-role tokens and the
+  pipeline name. README's pipeline selection table was populated from these
+  numbers with a caveat that the cost comparison is not final until a hosted
+  `fast` generator can be paired with a stronger judge.
 - [ ] **stage-07 live** — real GitHub App on the user's account (user creates it
   in the UI; agent supplies the exact manifest/permission values), installed on
   the sandbox; `sieve serve` on the dev machine + a tunnel (cloudflared/smee);

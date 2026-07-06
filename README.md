@@ -351,8 +351,22 @@ under `providers:` as a named entry and select it with a role.
 | `judge` | a liberal generator proposes, a second model verifies each finding against the code (may lower severity/confidence or drop, **never** invents a more-severe finding) | ~1.6× | you want fewer false positives without paying for a strong model on every token — **the recommended upgrade** |
 | `ensemble` | 2–3 reviewers run independently; only findings ≥2 of them agree on survive | 2–3× | experimental; you want a recall/precision study, not day-to-day CI |
 
-Relative cost/precision numbers from the seeded-sandbox comparison are
-_populated at the live-validation batch_ (placeholder until then).
+Measured on the seeded sandbox (`testdata/sandbox`) with local Ollama
+`kimi-k2.7-code:cloud` — the same model was used for every role because no hosted
+API key was available during this run, so the judge could not benefit from a
+stronger verifier. Numbers are still useful to validate the per-role token
+reporting and end-to-end pipeline wiring.
+
+| Pipeline | Recall | Precision | Input tokens | Output tokens | Wall time | Notes |
+|---|---|---|---|---|---|---|
+| `single` | 10/10 | 10/10 | 4,597 | 3,106 | ~45 s | baseline |
+| `single/fast` | 10/10 | 10/10 | 4,597 | 3,923 | ~47 s | same model, `max_tokens: 4096` |
+| `judge` | 10/10 | 10/10 | 12,595 | 7,705 | ~103 s | generator 9,147/7,193 + judge 3,448/512 |
+
+The judge here is **not** cheaper than `single` because the verifier uses the same
+model as the generator. The expected win (~1.6× cost vs single/strong) requires a
+cheap fast generator plus a strong, concise judge; repeat the gate with a hosted
+`fast` model before treating the README numbers as final.
 
 ### Judge pipeline
 
