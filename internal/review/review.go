@@ -14,14 +14,16 @@ import (
 	"github.com/gnanam1990/sieve/internal/config"
 	"github.com/gnanam1990/sieve/internal/diff"
 	"github.com/gnanam1990/sieve/internal/filter"
+	"github.com/gnanam1990/sieve/internal/findings"
 	"github.com/gnanam1990/sieve/internal/gh"
 )
 
 // FileEntry is one file of the PR with its filter decision.
 type FileEntry struct {
 	diff.FileDiff
-	Skipped    bool
-	SkipReason string `json:",omitempty"`
+	Skipped            bool
+	SkipReason         string `json:",omitempty"`
+	TruncatedForReview bool   `json:",omitempty"` // diff cut to fit the per-batch token budget
 }
 
 // Stats summarizes the review context.
@@ -31,6 +33,14 @@ type Stats struct {
 	FilesSkipped  int
 	LinesAdded    int
 	LinesRemoved  int
+
+	FindingsTotal   int // surviving (anchor-valid) findings
+	FindingsDropped int // rejected by the anchor/shape gate
+	BatchesFailed   int
+	Requests        int
+	Retries         int
+	InputTokens     int
+	OutputTokens    int
 }
 
 // ReviewContext is the full input a future review pass will consume, and
@@ -41,40 +51,74 @@ type ReviewContext struct {
 	Repo      string
 	PRNumber  int
 	Title     string
+	Body      string `json:",omitempty"`
 	Author    string
 	BaseSHA   string
 	HeadSHA   string
 	Draft     bool
 	Truncated bool
 	Files     []FileEntry
+	Findings  []findings.Finding
 	Stats     Stats
 }
 
-// Options configures a dry run.
+// Options configures a run.
 type Options struct {
 	Repo       string // "owner/name"
 	PRNumber   int
 	Token      string
 	ConfigPath string
+	DryRun     bool   // stop after context assembly; no LLM calls
 	APIBaseURL string // override for tests; empty means api.github.com
 	Log        *slog.Logger
 }
 
-// Build fetches everything and assembles the ReviewContext.
-func Build(ctx context.Context, opts Options) (*ReviewContext, error) {
-	owner, name, ok := strings.Cut(opts.Repo, "/")
-	if !ok || owner == "" || name == "" {
-		return nil, fmt.Errorf("invalid --repo %q, want owner/name", opts.Repo)
-	}
-
+// Run performs the full pipeline: stage-1 context assembly, then (unless
+// DryRun or a skipped draft) the LLM review pass. Still zero GitHub writes.
+func Run(ctx context.Context, opts Options) (*ReviewContext, error) {
 	cfg, err := config.Load(opts.ConfigPath)
 	if err != nil {
 		return nil, err
 	}
+	rc, client, err := build(ctx, opts, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if opts.DryRun {
+		return rc, nil
+	}
+	if err := cfg.ValidateForReview(); err != nil {
+		return nil, err
+	}
+	if rc.Draft && !cfg.Review.ReviewDrafts {
+		opts.Log.Info("PR is a draft; skipping LLM review (set review.review_drafts: true to review drafts)")
+		return rc, nil
+	}
+	if err := reviewPass(ctx, rc, client, cfg, opts); err != nil {
+		return nil, err
+	}
+	return rc, nil
+}
+
+// Build assembles the stage-1 ReviewContext only (no LLM).
+func Build(ctx context.Context, opts Options) (*ReviewContext, error) {
+	cfg, err := config.Load(opts.ConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	rc, _, err := build(ctx, opts, cfg)
+	return rc, err
+}
+
+func build(ctx context.Context, opts Options, cfg config.Config) (*ReviewContext, *gh.Client, error) {
+	owner, name, ok := strings.Cut(opts.Repo, "/")
+	if !ok || owner == "" || name == "" {
+		return nil, nil, fmt.Errorf("invalid --repo %q, want owner/name", opts.Repo)
+	}
 
 	client, err := gh.New(opts.Token, opts.Log)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if opts.APIBaseURL != "" {
 		client.BaseURL = opts.APIBaseURL
@@ -82,30 +126,32 @@ func Build(ctx context.Context, opts Options) (*ReviewContext, error) {
 
 	pr, err := client.GetPR(ctx, owner, name, opts.PRNumber)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	diffData, diffTruncated, err := client.GetDiff(ctx, owner, name, opts.PRNumber)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	listing, listTruncated, err := client.ListFiles(ctx, owner, name, opts.PRNumber)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	files, err := diff.Parse(diffData)
 	if err != nil {
-		return nil, fmt.Errorf("parse diff: %w", err)
+		return nil, nil, fmt.Errorf("parse diff: %w", err)
 	}
 	results, err := filter.Apply(files, cfg.Paths.Exclude)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	rc := &ReviewContext{
+		Findings:  []findings.Finding{}, // marshals as [] rather than null
 		Repo:      opts.Repo,
 		PRNumber:  opts.PRNumber,
 		Title:     pr.Title,
+		Body:      pr.Body,
 		Author:    pr.User.Login,
 		BaseSHA:   pr.Base.SHA,
 		HeadSHA:   pr.Head.SHA,
@@ -131,7 +177,7 @@ func Build(ctx context.Context, opts Options) (*ReviewContext, error) {
 			}
 		}
 	}
-	return rc, nil
+	return rc, client, nil
 }
 
 // WriteJSON emits the canonical JSON form: struct-ordered fields, 2-space
@@ -183,4 +229,23 @@ func (rc *ReviewContext) WriteSummary(w io.Writer) {
 
 	fmt.Fprintf(w, "\n%d files total, %d to review, %d skipped, +%d -%d lines\n",
 		rc.Stats.FilesTotal, rc.Stats.FilesReviewed, rc.Stats.FilesSkipped, rc.Stats.LinesAdded, rc.Stats.LinesRemoved)
+
+	if len(rc.Findings) > 0 {
+		fmt.Fprintf(w, "\nFINDINGS (%d)\n", len(rc.Findings))
+		ftw := tabwriter.NewWriter(w, 2, 4, 2, ' ', 0)
+		fmt.Fprintln(ftw, "SEVERITY\tLOCATION\tCONF\tTITLE")
+		for _, f := range rc.Findings {
+			loc := fmt.Sprintf("%s:%d", f.Path, f.Line)
+			if f.EndLine > 0 {
+				loc = fmt.Sprintf("%s:%d-%d", f.Path, f.Line, f.EndLine)
+			}
+			fmt.Fprintf(ftw, "%s\t%s\t%.2f\t%s\n", f.Severity, loc, f.Confidence, f.Title)
+		}
+		ftw.Flush() //nolint:errcheck // best-effort human output
+	}
+	if rc.Stats.Requests > 0 {
+		fmt.Fprintf(w, "\n%d findings (%d dropped by anchor gate), %d requests (%d retries, %d batches failed), tokens in/out %d/%d\n",
+			rc.Stats.FindingsTotal, rc.Stats.FindingsDropped, rc.Stats.Requests, rc.Stats.Retries,
+			rc.Stats.BatchesFailed, rc.Stats.InputTokens, rc.Stats.OutputTokens)
+	}
 }

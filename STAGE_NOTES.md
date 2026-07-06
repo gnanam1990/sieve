@@ -1,74 +1,112 @@
-# Stage 1 — Scaffold + Diff Engine (dry-run)
+# Stage 2 — Provider Layer + Review Pass + Findings Schema
 
-## Real-PR evidence (gate 3)
+## R0 — ZERO survey: lift vs rewrite
 
-Ran against **cli/cli#13791** ("chore(deps): bump github.com/klauspost/compress
-from 1.18.6 to 1.19.0" by dependabot[bot]), exit code 0:
+Surveyed `~/Desktop/dev/zero` provider packages (`internal/zeroruntime`,
+`internal/providers/{providerio,anthropic,openai}`, `internal/usage`,
+`internal/modelregistry`, `internal/providercatalog`). No ZERO module is
+imported; adapted patterns are re-implemented in `internal/` with
+attribution comments at the adoption sites.
 
-```
-cli/cli#13791 "chore(deps): bump github.com/klauspost/compress from 1.18.6 to 1.19.0" by dependabot[bot]
-base b300f2ec7ec9 -> head 62f01e7aac99
-
-FILE    STATUS    +  -  REVIEW
-go.mod  modified  1  1  keep
-go.sum  modified  2  2  skip: default exclude: **/go.sum
-
-2 files total, 1 to review, 1 skipped, +3 -3 lines
-```
-
-The go.mod-kept / go.sum-skipped split is the filter policy working as
-specified. Hunk function context (`require (`) was captured. Two consecutive
-runs produced byte-identical stdout (verified with `cmp`).
+| ZERO component | Decision | Rationale |
+|---|---|---|
+| `Provider` interface (`StreamCompletion` → event channel) | **fresh write** | ZERO is streaming-only with tool-call/reasoning event states; sieve is single-shot request/response by spec |
+| SSE machinery, stall watchdogs, `ScanSSEDataWithContext` | **not carried** | no streaming anywhere in sieve (spec constraint) |
+| Tool-calling / reasoning-block / conversation state | **not carried** | agent concerns; sieve sends one user message |
+| `providerio` retry policy (`ShouldRetryStatus`, `Backoff`, `RetryAfter`) | **pattern-lift, policy changed** | lifted: rebuild-per-attempt, Retry-After parsing (seconds + HTTP-date), 30s Retry-After cap, ctx-aware waits. Changed per spec: retryable set is 429 + all 5xx + `overloaded_error` (ZERO: 429/503/529 only), jitter added (ZERO has none), max 3 attempts (ZERO: 6) |
+| Bounded 64KB error-body read + `{"error":{type,message}}` parsing | **pattern-lift** | battle-tested defensive habit; same envelope works for Anthropic and OpenAI-compat |
+| Anthropic adapter (endpoint, `x-api-key`, `anthropic-version`) | **pattern-lift, simplified** | same wire shape minus streaming, cache breakpoints, thinking budgets |
+| OpenAI adapter (`Authorization: Bearer`, `choices[0].message.content`) | **pattern-lift, simplified** | non-streaming so ZERO's forced `stream_options.include_usage` is unnecessary — usage is present in blocking responses |
+| ZERO's darwin `DisableKeepAlives` stall fix | **not carried, noted** | that fix targets long-lived streaming agents; sieve's single-shot calls with per-request ctx timeouts don't exhibit the reused-dead-connection hang. Revisit if smoke runs ever stall |
+| `NormalizeUsage` cache-token clamping | **not carried** | sieve's Usage is 2 fields; no cache accounting until a cost feature needs it |
+| Token estimation | **fresh write** | ZERO has no estimator (usage is provider-reported); sieve needs pre-flight budgeting → bytes/4 heuristic in `internal/prompt` |
+| Model registry / provider catalog / credstore / OAuth | **not carried** | 4-layer key resolution is config-file-manager territory; sieve uses exactly one mechanism: env var named by `api_key_env` (ZERO's "layer 2") |
 
 ## Decisions / smallest-reasonable-choice notes
 
-- **`LineKind` constant names**: spec sketches `Context | Added | Removed`,
-  but `Added`/`Removed` collide with `FileStatus` constants in the same
-  package. Named them `AddedLine` / `RemovedLine`; JSON forms are still
-  `"added"` / `"removed"`.
-- **Statuses/kinds marshal as strings** (`"modified"`, `"context"`), not
-  ints, so golden files and the dry-run JSON are reviewable by humans.
-- **Created/deleted paths**: for `Added` files `OldPath` is `""`, for
-  `Deleted` files `NewPath` is `""` (the `/dev/null` side maps to empty).
-- **Default exclude globs are anchored at any depth** (`**/vendor/**`,
-  `**/go.sum`): the spec's table lists `vendor/**` etc., but a nested
-  `pkg/vendor/x.go` or `frontend/yarn.lock` is the same noise. doublestar's
-  `**` matches zero segments, so top-level files/dirs are covered too.
-- **`Stats.FilesTotal` comes from the files-listing endpoint**, not the
-  parsed diff — it stays authoritative when the diff is truncated at 5 MB.
-  `LinesAdded/LinesRemoved` are counted from parsed hunks across all files
-  (kept and skipped) to match GitHub's +/- display.
-- **`--api-url` hidden-ish flag**: GitHub API base-URL override so the CLI
-  can be end-to-end tested against `httptest` servers (and works with GHES
-  later). Documented only in `--help`-adjacent code, not README.
-- **Non-dry-run `review` errors out** with "only --dry-run is supported in
-  this stage" rather than silently behaving like dry-run.
-- **`diff --git` path fallback**: entries with no `---`/`+++` or
-  rename/copy headers (binary, mode-only) parse paths from the
-  `diff --git a/X b/Y` line. Paths containing ` b/` are ambiguous there by
-  construction; the parser prefers the split where both halves are equal
-  (the common old==new case) and falls back to the first plausible split.
-  Quoted paths (spaces, unicode) are unquoted via `strconv.Unquote`.
-- **Retry policy**: 429 and 5xx always retried; 403 retried only when it
-  looks like a rate limit (`Retry-After` present or `X-RateLimit-Remaining:
-  0`). Other 4xx fail immediately. Max 4 attempts, exponential backoff with
-  jitter, `Retry-After` honored verbatim.
-- **gosec G104 disabled** (duplicate of errcheck), **G304 disabled**
-  (reading user-supplied config paths is a CLI's job); `fmt.Fprint*` to
-  local writers excluded from errcheck. Everything else is on.
-- **Fixtures are real git output**: generated by scripting an actual git
-  repo (commits, renames with `git mv`, `chmod`, CRLF/no-EOF files, a
-  binary blob, `-C --find-copies-harder` for the copy case) and capturing
-  `git diff`. 13 fixtures, each with a golden JSON.
+- **Ollama quirks found (openai-compat)**: (1) local Ollama ignores the
+  `Authorization` value but sieve still requires the named env var to be
+  non-empty — docs say set `OLLAMA_API_KEY=ollama`; (2) some compat servers
+  omit `usage` in responses → treated as zero, not an error; (3) `max_tokens`
+  (not `max_completion_tokens`) is sent because Ollama/OpenRouter/Groq all
+  accept it. Nothing is silently special-cased per server.
+- **Corrective retry prompt** re-sends the original user prompt with a
+  correction note appended (per spec "appended to the same request"), not a
+  multi-turn conversation — providers here are stateless single-shot.
+- **`Stats.FindingsTotal` counts surviving findings** (post-gate), and
+  `FindingsDropped` counts rejects; total raw = sum of both.
+- **`EndLine` ranges must sit within a single hunk** — GitHub multi-line
+  review comments cannot span hunks, so "same hunk-reachability" is enforced
+  literally.
+- **Context lines are annotated `R:<NewNum>`** in prompts. They are also
+  commentable on LEFT, but one anchor per line keeps the prompt unambiguous;
+  the validator still accepts LEFT context anchors if a model emits them.
+- **`ReviewContext` gained `Body`** (PR description) since prompts need it;
+  `json:",omitempty"` keeps old dry-run outputs identical when empty.
+- **Draft skip returns the stage-1 context** with `Findings: []` and zero
+  provider traffic; the notice goes to stderr via slog.
+- **model/api_key_env/base_url/fixture are validated only for the LLM path**
+  (`ValidateForReview`) so `--dry-run` keeps working with an empty config.
+  Range checks (max_tokens etc.) always run.
+- **System prompt is a `text/template`** rendering `MaxTitleLen` from
+  `internal/findings`, so the prompt's contract can't drift from the
+  validator. Golden-pinned (`internal/prompt/testdata/system.golden.md`).
+- **Fake provider usage** is estimated bytes/4 on both sides so stats
+  plumbing is deterministic offline.
 
-## Deviations from spec
+## Offline E2E (gate 3)
 
-- None functional. The spec's fixture minimum (≥10) is exceeded (13).
-- Go toolchain used locally is 1.26; `go.mod` and CI pin the 1.23 floor
-  (`go 1.23`, CI matrix `1.23.x`), and no post-1.23 language features are
-  used beyond stdlib available in 1.23 (`math/rand/v2` is 1.22+).
+`TestRunEndToEndFakeGolden` (`internal/review`): fake GitHub serving the
+`multi_file_multi_hunk.diff` stage-1 fixture + `provider.type: fake` with a
+canned response containing 1 valid + 1 hallucinated-anchor + 1 bad-severity
+finding. Exactly 1 survives, `FindingsDropped: 2`, output golden-pinned at
+`internal/review/testdata/e2e_fake.golden.json`.
+
+## Live smoke (gate 4)
+
+Provider: local **Ollama** OpenAI-compat endpoint proxying the
+`qwen3-coder:480b-cloud` model (no hosted API key present on this machine;
+Ollama ignores the bearer value, `OLLAMA_API_KEY=ollama` satisfies the
+non-empty check). Config:
+
+```yaml
+provider:
+  type: openai-compat
+  model: qwen3-coder:480b-cloud
+  base_url: http://localhost:11434/v1
+  api_key_env: OLLAMA_API_KEY
+  timeout_seconds: 300
+```
+
+Run 1 — `sieve review --repo cli/cli --pr 13784 --config .sieve.yml`, exit **0**:
+
+```
+2 files total, 2 to review, 0 skipped, +53 -0 lines
+0 findings (0 dropped by anchor gate), 1 requests (0 retries, 0 batches failed), tokens in/out 11507/7
+```
+
+Run 2 — `sieve review --repo cli/cli --pr 13723 --config .sieve.yml`, exit **0**:
+
+```
+5 files total, 5 to review, 0 skipped, +142 -12 lines
+0 findings (0 dropped by anchor gate), 1 requests (0 retries, 0 batches failed), tokens in/out 26270/7
+```
+
+Both runs returned `{"findings": []}` (7 output tokens) — clean, small,
+already-merged PRs; zero findings is the honest answer and the spec accepts
+"anchor-drop counter exercised **or zero**". The findings + drop paths are
+exercised end-to-end by the offline E2E golden (1 survivor, 2 dropped).
+
+One test-only flake found during gating: the anthropic timeout test blocked
+its handler on `r.Context().Done()`, which under `-coverpkg` instrumentation
+sometimes never fired (client-disconnect detection), hanging `srv.Close`.
+Fixed by releasing the handler via an explicitly closed channel.
 
 ## Coverage at tag time
 
-- `internal/diff`: 90.3% (gate ≥ 90%)
-- overall (`-coverpkg=./...`): 89.8% (gate ≥ 80%)
+- `internal/diff`: 90.3% (gate ≥ 90%, package untouched this stage)
+- `internal/findings`: 100.0% (gate ≥ 90%)
+- `internal/provider/...`: 95.2% (gate ≥ 85%, measured with
+  `-coverpkg=./internal/provider/...` since the shared HTTP/retry code in
+  the parent package is exercised by the adapter packages' tests)
+- overall (`-coverpkg=./...`): 90.0% (gate ≥ 80%)

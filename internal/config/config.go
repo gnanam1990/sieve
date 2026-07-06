@@ -29,12 +29,25 @@ type Review struct {
 	// validated now so a bad config fails fast.
 	MaxComments   int     `yaml:"max_comments"`
 	MinConfidence float64 `yaml:"min_confidence"`
+
+	IncludeFileContent bool `yaml:"include_file_content"` // attach full changed-file contents when small
+	MaxFileContentKB   int  `yaml:"max_file_content_kb"`  // per-file cap for content attachment
+	Concurrency        int  `yaml:"concurrency"`          // parallel provider calls
+	ReviewDrafts       bool `yaml:"review_drafts"`        // review draft PRs too
 }
 
-// Provider holds LLM provider selection.
+// Provider holds LLM provider selection. There is deliberately no api_key
+// field: keys come only from the env var named by api_key_env, so a key
+// can never end up committed in .sieve.yml.
 type Provider struct {
-	// Model is reserved for stage 2.
-	Model string `yaml:"model"`
+	Type           string  `yaml:"type"`     // anthropic | openai-compat | fake
+	Model          string  `yaml:"model"`    // required for anthropic/openai-compat
+	BaseURL        string  `yaml:"base_url"` // required iff type == openai-compat
+	APIKeyEnv      string  `yaml:"api_key_env"`
+	MaxTokens      int     `yaml:"max_tokens"`
+	Temperature    float64 `yaml:"temperature"`
+	TimeoutSeconds int     `yaml:"timeout_seconds"`
+	Fixture        string  `yaml:"fixture"` // fake type only: canned response file
 }
 
 // Config is the full .sieve.yml schema.
@@ -48,8 +61,19 @@ type Config struct {
 func Default() Config {
 	return Config{
 		Review: Review{
-			MaxComments:   10,
-			MinConfidence: 0.7,
+			MaxComments:        10,
+			MinConfidence:      0.7,
+			IncludeFileContent: true,
+			MaxFileContentKB:   64,
+			Concurrency:        3,
+			ReviewDrafts:       false,
+		},
+		Provider: Provider{ //nolint:gosec // G101: APIKeyEnv holds the NAME of an env var, never a credential
+			Type:           "anthropic",
+			APIKeyEnv:      "ANTHROPIC_API_KEY",
+			MaxTokens:      4096,
+			Temperature:    0.1,
+			TimeoutSeconds: 120,
 		},
 	}
 }
@@ -118,6 +142,48 @@ func (c Config) Validate() error {
 	}
 	if c.Review.MinConfidence < 0.0 || c.Review.MinConfidence > 1.0 {
 		return fmt.Errorf("review.min_confidence must be between 0.0 and 1.0, got %g", c.Review.MinConfidence)
+	}
+	if c.Review.MaxFileContentKB < 1 {
+		return fmt.Errorf("review.max_file_content_kb must be positive, got %d", c.Review.MaxFileContentKB)
+	}
+	if c.Review.Concurrency < 1 || c.Review.Concurrency > 8 {
+		return fmt.Errorf("review.concurrency must be between 1 and 8, got %d", c.Review.Concurrency)
+	}
+	switch c.Provider.Type {
+	case "anthropic", "openai-compat", "fake":
+	default:
+		return fmt.Errorf("provider.type must be anthropic, openai-compat, or fake; got %q", c.Provider.Type)
+	}
+	if c.Provider.MaxTokens < 256 || c.Provider.MaxTokens > 32768 {
+		return fmt.Errorf("provider.max_tokens must be between 256 and 32768, got %d", c.Provider.MaxTokens)
+	}
+	if c.Provider.Temperature < 0 || c.Provider.Temperature > 1 {
+		return fmt.Errorf("provider.temperature must be between 0 and 1, got %g", c.Provider.Temperature)
+	}
+	if c.Provider.TimeoutSeconds < 10 || c.Provider.TimeoutSeconds > 600 {
+		return fmt.Errorf("provider.timeout_seconds must be between 10 and 600, got %d", c.Provider.TimeoutSeconds)
+	}
+	return nil
+}
+
+// ValidateForReview checks the requirements that only matter when an LLM
+// call is about to happen (a dry run never needs a model or key name).
+func (c Config) ValidateForReview() error {
+	switch c.Provider.Type {
+	case "anthropic", "openai-compat":
+		if c.Provider.Model == "" {
+			return fmt.Errorf("provider.model is required for provider.type %q", c.Provider.Type)
+		}
+		if c.Provider.APIKeyEnv == "" {
+			return fmt.Errorf("provider.api_key_env is required for provider.type %q", c.Provider.Type)
+		}
+		if c.Provider.Type == "openai-compat" && c.Provider.BaseURL == "" {
+			return fmt.Errorf("provider.base_url is required for provider.type openai-compat (e.g. https://api.openai.com/v1, http://localhost:11434/v1)")
+		}
+	case "fake":
+		if c.Provider.Fixture == "" {
+			return fmt.Errorf("provider.fixture is required for provider.type fake")
+		}
 	}
 	return nil
 }

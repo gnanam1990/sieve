@@ -70,10 +70,6 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 	}
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
 
-	if !*dryRun {
-		fmt.Fprintln(stderr, "error: only --dry-run is supported in this stage")
-		return exitError
-	}
 	if *repo == "" {
 		*repo = gh.RepoFromEnv()
 	}
@@ -88,11 +84,12 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 		return exitError
 	}
 
-	rc, err := review.Build(context.Background(), review.Options{
+	rc, err := review.Run(context.Background(), review.Options{
 		Repo:       *repo,
 		PRNumber:   *pr,
 		Token:      *token,
 		ConfigPath: *cfgPath,
+		DryRun:     *dryRun,
 		APIBaseURL: *apiURL,
 		Log:        logger,
 	})
@@ -107,7 +104,7 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 	if !*jsonOnly {
 		rc.WriteSummary(stderr)
 	}
-	if rc.Truncated {
+	if rc.Truncated || rc.Stats.BatchesFailed > 0 {
 		return exitPartial
 	}
 	return exitOK
@@ -117,7 +114,8 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `sieve — zero-infra PR reviewer
 
 usage:
-  sieve review --repo owner/name --pr N --dry-run   dump ReviewContext (read-only)
+  sieve review --repo owner/name --pr N             LLM review, findings on stdout (read-only)
+  sieve review --repo owner/name --pr N --dry-run   context dump only, no LLM calls
   sieve version                                     print version
 
 review flags:
@@ -125,7 +123,7 @@ review flags:
   --pr         pull request number (default: pull_request.number from $GITHUB_EVENT_PATH)
   --token      GitHub token (default: $GITHUB_TOKEN)
   --config     config file (default: .sieve.yml)
-  --dry-run    required in stage 1; no GitHub writes ever happen
+  --dry-run    skip the LLM pass; no GitHub writes ever happen either way
   --json-only  suppress the stderr summary
   --debug      debug logging
 `)

@@ -1,5 +1,8 @@
 # sieve configuration — every key is optional; these are the defaults.
 # Unknown keys are a hard error (typo protection).
+#
+# SECURITY: there is no api_key field, on purpose. Keys are read from the
+# environment variable NAMED by api_key_env and can never live in this file.
 
 paths:
   exclude: []
@@ -8,8 +11,18 @@ paths:
   #   - "**/*.gen.go"
 
 review:
-  max_comments: 10     # reserved — validated now, used in stage 3 (1-50)
-  min_confidence: 0.7  # reserved — validated now, used in stage 3 (0.0-1.0)
+  max_comments: 10           # reserved — validated now, used in stage 3 (1-50)
+  min_confidence: 0.7        # reserved — validated now, used in stage 3 (0.0-1.0)
+  include_file_content: true # attach full changed-file contents when small
+  max_file_content_kb: 64    # per-file cap for content attachment
+  concurrency: 3             # parallel provider calls (1-8)
+  review_drafts: false       # draft PRs are skipped unless true
 
 provider:
-  model: ""            # reserved — parsed + validated, unused until stage 2
+  type: anthropic            # anthropic | openai-compat | fake
+  model: ""                  # required for anthropic/openai-compat, e.g. claude-sonnet-5
+  base_url: ""               # required iff type == openai-compat
+  api_key_env: ANTHROPIC_API_KEY  # NAME of the env var holding the key
+  max_tokens: 4096           # 256-32768
+  temperature: 0.1           # 0-1
+  timeout_seconds: 120       # 10-600, per provider request

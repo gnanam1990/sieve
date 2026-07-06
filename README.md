@@ -3,9 +3,11 @@
 A zero-infra, provider-agnostic PR reviewer. Single Go binary, no server, no
 containers — runs as a CLI or (later) a GitHub Action with your own API keys.
 
-**Stage 1 status:** read-only dry run. sieve fetches a PR, parses its diff
-into an exact line-anchor model, applies noise filters, and dumps the
-resulting `ReviewContext` as JSON. No LLM calls, no writes to GitHub.
+**Stage 2 status:** full read-only review. sieve fetches a PR, parses its
+diff into an exact line-anchor model, applies noise filters, sends batched
+prompts to the LLM provider of your choice, anchor-validates every finding
+against the real diff, and emits findings as JSON + a summary table.
+**Nothing is ever written to GitHub yet** — posting comments is stage 3.
 
 ## Install
 
@@ -13,71 +15,146 @@ resulting `ReviewContext` as JSON. No LLM calls, no writes to GitHub.
 go install github.com/gnanam1990/sieve/cmd/sieve@latest
 ```
 
-Or from a checkout:
-
-```sh
-make build   # produces ./sieve
-```
-
-Requires Go 1.23+. No CGo.
+Or from a checkout: `make build`. Requires Go 1.23+. No CGo.
 
 ## Quickstart
 
 ```sh
-export GITHUB_TOKEN=ghp_...   # or pass --token
-sieve review --repo cli/cli --pr 13791 --dry-run
+export GITHUB_TOKEN=ghp_...        # or --token
+export ANTHROPIC_API_KEY=sk-ant-...
+cat > .sieve.yml <<'EOF'
+provider:
+  type: anthropic
+  model: claude-sonnet-5
+EOF
+sieve review --repo owner/name --pr 123
 ```
 
-- **stdout** — deterministic, byte-stable JSON `ReviewContext` (pipe it to `jq`)
-- **stderr** — human summary: PR header, per-file table, stats footer
+- **stdout** — deterministic JSON `ReviewContext` including `Findings` (pipe to `jq`)
+- **stderr** — human summary: file table, findings table, token usage footer
 
-```
-cli/cli#13791 "chore(deps): bump github.com/klauspost/compress ..." by dependabot[bot]
-base b300f2ec7ec9 -> head 62f01e7aac99
+`--dry-run` skips the LLM pass entirely (stage-1 behavior: context dump only).
+`--json-only` suppresses the stderr summary. Exit codes: `0` ok · `2` partial
+(truncated context or a failed batch) · `1` error.
 
-FILE    STATUS    +  -  REVIEW
-go.mod  modified  1  1  keep
-go.sum  modified  2  2  skip: default exclude: **/go.sum
+Draft PRs are skipped (exit 0, empty findings) unless `review.review_drafts: true`.
 
-2 files total, 1 to review, 1 skipped, +3 -3 lines
-```
+## Provider configuration
 
-Flags: `--json-only` suppresses the stderr summary (CI use); `--debug` raises
-log verbosity.
+API keys are **never** written in config. `.sieve.yml` holds the *name* of an
+environment variable (`api_key_env`); sieve reads the key from there at run
+time. An `api_key:` field in config is a hard error.
 
-Exit codes: `0` success · `2` partial (diff or file listing truncated) ·
-`1` error.
-
-### GitHub Actions mode
-
-When `--repo`/`--pr` are absent, sieve falls back to `GITHUB_REPOSITORY` and
-the `pull_request.number` in the event payload at `GITHUB_EVENT_PATH`, so a
-bare `sieve review --dry-run` works inside a `pull_request` workflow.
-
-## Configuration
-
-Optional `.sieve.yml` at the repo root. Every key is optional; unknown keys
-are a **hard error** (typo protection).
+### Anthropic
 
 ```yaml
-paths:
-  exclude:            # globs (doublestar ** semantics), matched against the
-    - "docs/**"       # new path (old path for deletes)
-    - "**/*.gen.go"
-
-review:
-  max_comments: 10    # reserved for stage 3; range 1-50
-  min_confidence: 0.7 # reserved for stage 3; range 0.0-1.0
-
 provider:
-  model: ""           # reserved for stage 2
+  type: anthropic
+  model: claude-sonnet-5
+  api_key_env: ANTHROPIC_API_KEY
 ```
 
-Precedence: built-in defaults → `.sieve.yml` → environment → flags.
+### OpenAI
 
-Environment overrides: `SIEVE_MAX_COMMENTS`, `SIEVE_MIN_CONFIDENCE`,
-`SIEVE_MODEL`, `SIEVE_EXCLUDE` (comma-separated globs, appended to the file's
-list). Token: `--token` flag or `GITHUB_TOKEN`.
+```yaml
+provider:
+  type: openai-compat
+  model: gpt-5.2
+  base_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY
+```
+
+### OpenRouter
+
+```yaml
+provider:
+  type: openai-compat
+  model: qwen/qwen3-coder-next
+  base_url: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+```
+
+### Groq
+
+```yaml
+provider:
+  type: openai-compat
+  model: llama-4.1-70b
+  base_url: https://api.groq.com/openai/v1
+  api_key_env: GROQ_API_KEY
+```
+
+### Ollama (local)
+
+```yaml
+provider:
+  type: openai-compat
+  model: qwen3-coder
+  base_url: http://localhost:11434/v1
+  api_key_env: OLLAMA_API_KEY   # Ollama ignores the value; set e.g. OLLAMA_API_KEY=ollama
+```
+
+`base_url` is required for `openai-compat` — there is no default, so requests
+never go somewhere you didn't name. Knobs: `max_tokens` (256–32768, default
+4096), `temperature` (0–1, default 0.1), `timeout_seconds` (10–600, default
+120, per request). Retries: 429/5xx/Anthropic-overloaded are retried up to 3
+attempts with backoff + jitter, honoring `Retry-After`.
+
+## Findings schema
+
+Each finding in `Findings[]`:
+
+| Field | Meaning |
+|---|---|
+| `Path` | changed file the finding is anchored to |
+| `Line` / `EndLine` | anchor line(s); `NewNum` for RIGHT, `OldNum` for LEFT; `EndLine` 0 = single line |
+| `Side` | `RIGHT` (new file) or `LEFT` (old file), GitHub Reviews API vocabulary |
+| `Severity` | `critical` \| `major` \| `minor` \| `nit` |
+| `Confidence` | model-reported calibrated probability 0..1 (not yet filtered on — stage 3) |
+| `Category` | `bug` \| `security` \| `perf` \| `correctness` \| `test` \| `style` |
+| `Title` | one line, ≤120 chars |
+| `Body` | markdown: why + fix |
+| `Suggestion` | optional replacement code (rendered in stage 3+) |
+
+**Anchor gate:** every finding is validated against the parsed diff — the
+path must be a kept file and the line(s) must be commentable on the claimed
+side within a single hunk. Findings that fail are dropped (never repaired)
+and counted in `Stats.FindingsDropped`. This is the anti-hallucination gate:
+a comment that would land on the wrong line is worse than no comment.
+
+Output ordering is deterministic: severity, then path, then line.
+`Stats` reports `FindingsTotal`, `FindingsDropped`, `BatchesFailed`,
+`Requests`, `Retries`, `InputTokens`, `OutputTokens`.
+
+## Review scope controls
+
+```yaml
+review:
+  include_file_content: true # attach full file contents to prompts when small
+  max_file_content_kb: 64    # per-file attachment cap
+  concurrency: 3             # parallel provider calls (1-8)
+  review_drafts: false
+```
+
+Prompts are greedy-packed into batches of ≤24k estimated input tokens
+(bytes/4). A single file exceeding the whole budget is truncated hunk-by-hunk
+and marked `TruncatedForReview` in the output.
+
+## Testing with the fake provider
+
+For offline runs and CI, `type: fake` returns a canned response instead of
+calling any API — **not for real use**:
+
+```yaml
+provider:
+  type: fake
+  fixture: path/to/canned-response.json   # file content is returned verbatim
+```
+
+The fixture should contain the same JSON contract a real model returns:
+`{"findings": [...]}`. Findings still go through the anchor gate, so a
+fixture with stale line numbers gets dropped — which makes it a good test of
+the gate itself.
 
 ## Default excludes
 
@@ -98,19 +175,20 @@ reviewable; `go.sum` is noise.
 
 ## Limits
 
-- Diff fetch is capped at **5 MB**; larger diffs are truncated at the last
-  complete file boundary and flagged `Truncated` (exit code 2).
-- GitHub caps the PR file listing at **3000 files**; hitting it also flags
-  `Truncated`.
+- Diff fetch capped at **5 MB** (truncated at the last complete file
+  boundary); GitHub caps file listings at **3000 files**. Either sets
+  `Truncated` and exit code 2.
+- PR description is truncated to 2 KB in prompts.
 
 ## Development
 
 ```sh
 make test    # go test ./... -race -shuffle=on
 make lint    # golangci-lint
-make cover   # enforces internal/diff >= 90%, overall >= 80%
-make golden  # regenerate diff-parser golden files (UPDATE_GOLDEN=1)
+make cover   # gates: diff/findings >= 90%, provider >= 85%, overall >= 80%
+make golden  # regenerate parser, prompt, and E2E golden files
 ```
 
 Dependency policy: `yaml.v3`, `doublestar`, `go-cmp` (tests only) — nothing
-else. GitHub REST is spoken via stdlib `net/http`.
+else. GitHub REST and all LLM APIs are spoken via stdlib `net/http`. No
+streaming, no SSE: blocking completion calls with per-request timeouts.

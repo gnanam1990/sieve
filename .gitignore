@@ -1,6 +1,6 @@
 /sieve
 coverage.out
-coverage.diff.out
+coverage.*.out
 *.test
 
 # never commit secrets
