@@ -39,3 +39,20 @@ jobs:
           go-version: "1.23.x"
       - name: coverage thresholds
         run: make cover
+
+  # Lint the release/action plumbing: workflow YAML, action.yml, and shell.
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint
+        uses: raven-actions/actionlint@v2
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck install.sh scripts/*.sh

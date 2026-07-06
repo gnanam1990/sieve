@@ -1,0 +1,50 @@
+name: action-smoke
+
+# Manually smoke-tests the composite action from the local checkout (uses: ./)
+# against a real open PR in this repo, WITHOUT posting. Proves the download +
+# checksum + config + run plumbing on a hosted runner. Requires a prior release
+# (the VERSION file must resolve to published binaries) and a SIEVE_API_KEY
+# repo secret.
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Open PR number in this repo to review (no writes)"
+        required: true
+      model:
+        description: "Model id"
+        required: false
+        default: claude-sonnet-4-6
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Craft a pull_request event for the target PR
+        env:
+          PR: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          case "$PR" in
+            ''|*[!0-9]*) echo "::error::pr_number must be numeric"; exit 1 ;;
+          esac
+          event="${RUNNER_TEMP}/event.json"
+          printf '{"pull_request":{"number":%s,"head":{"repo":{"full_name":"%s"}},"base":{"repo":{"full_name":"%s"}}},"repository":{"full_name":"%s"}}' \
+            "$PR" "$GITHUB_REPOSITORY" "$GITHUB_REPOSITORY" "$GITHUB_REPOSITORY" > "$event"
+          echo "GITHUB_EVENT_PATH=${event}" >> "$GITHUB_ENV"
+
+      - name: "Run sieve action (post=false)"
+        uses: ./
+        with:
+          provider: anthropic
+          model: ${{ inputs.model }}
+          post: "false"
+        env:
+          SIEVE_API_KEY: ${{ secrets.SIEVE_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}

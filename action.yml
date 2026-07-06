@@ -1,0 +1,201 @@
+name: "sieve PR review"
+description: "Zero-infra AI PR reviewer: downloads the pinned sieve binary, verifies its checksum, and reviews the triggering PR."
+author: "gnanam1990"
+
+branding:
+  icon: filter
+  color: gray-dark
+
+inputs:
+  provider:
+    description: "LLM provider: anthropic | openai-compat | fake"
+    required: false
+    default: anthropic
+  model:
+    description: "Model id (required for anthropic/openai-compat), e.g. claude-sonnet-4-6"
+    required: false
+    default: ""
+  base_url:
+    description: "API base URL — required iff provider is openai-compat"
+    required: false
+    default: ""
+  api_key_env_name:
+    description: >-
+      Name of the environment variable that holds the model API key. The key
+      is read from this env var at run time; it is NEVER passed as an action
+      input (inputs are echoed to logs and the process table — secrets must not
+      be). Set it in your workflow's `env:` from a repository secret.
+    required: false
+    default: SIEVE_API_KEY
+  config_path:
+    description: "Path to .sieve.yml (review scope + gate settings). A provider block is appended only if the file has none."
+    required: false
+    default: .sieve.yml
+  post:
+    description: "Post results to the PR (walkthrough + inline review). false = review only."
+    required: false
+    default: "true"
+  version:
+    description: "sieve release to download. Empty = the version pinned by the action's VERSION file at the ref you referenced (e.g. @v0)."
+    required: false
+    default: ""
+  fail_on_partial:
+    description: "Fail the job on sieve exit code 2 (partial: truncated diff or a failed inline post). Default false — a truncated diff must not break CI."
+    required: false
+    default: "false"
+  sarif_files:
+    description: "Reserved for a future stage (SARIF ingestion). Accepted and warned about; currently a no-op."
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve sieve version
+      id: resolve
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        if [ -n "${INPUT_VERSION}" ]; then
+          version="${INPUT_VERSION}"
+        elif [ -f "${GITHUB_ACTION_PATH}/VERSION" ]; then
+          version="$(tr -d ' \t\r\n' < "${GITHUB_ACTION_PATH}/VERSION")"
+        else
+          echo "::error::cannot resolve sieve version: no 'version' input and no VERSION file in the action"
+          exit 1
+        fi
+        echo "version=${version}" >> "$GITHUB_OUTPUT"
+        echo "sieve version: \`${version}\`" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Download and verify sieve binary
+      id: download
+      shell: bash
+      env:
+        VERSION: ${{ steps.resolve.outputs.version }}
+        # gh needs a token; github.token avoids anonymous rate limits.
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+        arch="$(uname -m)"
+        case "$arch" in
+          x86_64|amd64) arch=amd64 ;;
+          aarch64|arm64) arch=arm64 ;;
+          *) echo "::error::unsupported architecture: $arch"; exit 1 ;;
+        esac
+        asset="sieve_${os}_${arch}"
+        repo="${GITHUB_ACTION_REPOSITORY:-$GITHUB_REPOSITORY}"
+        tmp="$(mktemp -d)"
+
+        echo "downloading ${asset} @ ${VERSION} from ${repo}"
+        gh release download "${VERSION}" --repo "${repo}" \
+          --pattern "${asset}" --pattern "checksums.txt" --dir "${tmp}"
+
+        # Verify sha256 against checksums.txt; a mismatch is a hard fail.
+        # `|| true` keeps a no-match from aborting (set -e/pipefail) before the
+        # explicit error below.
+        want="$(grep " ${asset}\$" "${tmp}/checksums.txt" | awk '{print $1}' || true)"
+        if [ -z "${want}" ]; then
+          echo "::error::no checksum entry for ${asset} in checksums.txt"; exit 1
+        fi
+        if command -v sha256sum >/dev/null 2>&1; then
+          got="$(sha256sum "${tmp}/${asset}" | awk '{print $1}')"
+        else
+          got="$(shasum -a 256 "${tmp}/${asset}" | awk '{print $1}')"
+        fi
+        if [ "${want}" != "${got}" ]; then
+          echo "::error::checksum mismatch for ${asset}: expected ${want}, got ${got}"; exit 1
+        fi
+        echo "checksum ok: ${asset}"
+
+        install -m 0755 "${tmp}/${asset}" "${tmp}/sieve"
+        echo "bindir=${tmp}" >> "$GITHUB_OUTPUT"
+
+    - name: Run sieve review
+      shell: bash
+      env:
+        BINDIR: ${{ steps.download.outputs.bindir }}
+        VERSION: ${{ steps.resolve.outputs.version }}
+        PROVIDER: ${{ inputs.provider }}
+        MODEL: ${{ inputs.model }}
+        BASE_URL: ${{ inputs.base_url }}
+        API_KEY_ENV_NAME: ${{ inputs.api_key_env_name }}
+        CONFIG_PATH: ${{ inputs.config_path }}
+        POST: ${{ inputs.post }}
+        FAIL_ON_PARTIAL: ${{ inputs.fail_on_partial }}
+        SARIF_FILES: ${{ inputs.sarif_files }}
+        # sieve reads repo/PR from GITHUB_REPOSITORY + GITHUB_EVENT_PATH, the
+        # GitHub token from GITHUB_TOKEN, and the model key from the env var
+        # named by api_key_env_name — all inherited from the job env.
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+
+        if [ -n "${SARIF_FILES}" ]; then
+          echo "::warning::sarif_files is reserved for a future stage and is currently ignored"
+        fi
+
+        # Validate provider inputs (composite actions do not enforce `required`).
+        if [ "${PROVIDER}" != "fake" ] && [ -z "${MODEL}" ]; then
+          echo "::error::input 'model' is required for provider '${PROVIDER}'"; exit 1
+        fi
+        if [ "${PROVIDER}" = "openai-compat" ] && [ -z "${BASE_URL}" ]; then
+          echo "::error::input 'base_url' is required when provider is openai-compat"; exit 1
+        fi
+
+        # Append a provider block only when the config has none — the user's
+        # own provider block (and all review/gate settings) always wins.
+        cfg="${CONFIG_PATH}"
+        if [ ! -f "${cfg}" ] || ! grep -qE '^provider:' "${cfg}"; then
+          {
+            echo ""
+            echo "provider:"
+            echo "  type: ${PROVIDER}"
+            echo "  model: \"${MODEL}\""
+            echo "  api_key_env: ${API_KEY_ENV_NAME}"
+            if [ -n "${BASE_URL}" ]; then echo "  base_url: ${BASE_URL}"; fi
+          } >> "${cfg}"
+          echo "wrote provider block to ${cfg}"
+        else
+          echo "${cfg} already defines a provider block; leaving it untouched"
+        fi
+
+        args=(review --config "${cfg}")
+        if [ "${POST}" = "true" ]; then args+=(--post); fi
+
+        out="$(mktemp)"
+        set +e
+        "${BINDIR}/sieve" "${args[@]}" >"${out}"
+        code=$?
+        set -e
+        cat "${out}"  # ReviewContext JSON to the log
+
+        # Run summary from sieve's JSON output.
+        if command -v jq >/dev/null 2>&1 && [ -s "${out}" ]; then
+          fr=$(jq -r '.Stats.FilesReviewed // 0' "${out}")
+          fs=$(jq -r '.Stats.FilesSkipped // 0' "${out}")
+          inl=$(jq -r '.Gate.Stats.InlineCount // 0' "${out}")
+          notes=$(jq -r '.Gate.Stats.NotesCount // 0' "${out}")
+          res=$(jq -r '.Gate.Stats.ResolvedCount // 0' "${out}")
+          tin=$(jq -r '.Stats.InputTokens // 0' "${out}")
+          tout=$(jq -r '.Stats.OutputTokens // 0' "${out}")
+          {
+            echo "## sieve review"
+            echo ""
+            echo "- version: \`${VERSION}\` · model: \`${MODEL:-${PROVIDER}}\`"
+            echo "- files: ${fr} reviewed, ${fs} skipped"
+            echo "- findings: ${inl} inline · ${notes} notes · ${res} resolved"
+            echo "- tokens: in ${tin} / out ${tout}"
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        # Exit-code policy: 2 (partial) is a warning, not a failure, unless
+        # fail_on_partial=true — a truncated diff must not break someone's CI.
+        if [ "${code}" = "2" ] && [ "${FAIL_ON_PARTIAL}" != "true" ]; then
+          echo "::warning::sieve exited 2 (partial: truncated diff or a failed inline post); not failing the job"
+          echo "> sieve exited 2 (partial) — not failing the job (fail_on_partial=false)." >> "$GITHUB_STEP_SUMMARY"
+          code=0
+        fi
+        exit "${code}"

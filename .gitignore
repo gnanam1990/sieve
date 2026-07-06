@@ -1,4 +1,5 @@
 /sieve
+/dist/
 coverage.out
 coverage.*.out
 coverage.tmp.out

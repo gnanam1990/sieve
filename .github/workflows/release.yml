@@ -1,0 +1,46 @@
+name: release
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+
+permissions:
+  contents: write # publish releases + move the floating major tag
+
+jobs:
+  # Release blocks on a green race-enabled suite — never ship a red build.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - run: go test ./... -race
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # goreleaser needs full history for the changelog
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Only used for the Homebrew tap push on stable releases; absent is
+          # fine for prereleases (brews.skip_upload: auto).
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      - name: move floating major tag and pin VERSION
+        env:
+          # v0 bootstrap: move the major tag even for the rc so @v0 resolves
+          # during Stage 4 testing. REMOVE this after the first stable v0.x.0
+          # ships, so v0 then only ever tracks stable releases.
+          MOVE_MAJOR_ON_PRERELEASE: "true"
+        run: bash scripts/move_major_tag.sh "${GITHUB_REF_NAME}"
