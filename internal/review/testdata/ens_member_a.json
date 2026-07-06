@@ -1,0 +1,1 @@
+{"findings":[{"Path":"alpha.txt","Line":3,"Side":"RIGHT","Severity":"major","Confidence":0.8,"Category":"bug","Title":"Member A: numeric token replaced by a word","Body":"Downstream sorters will misorder line 3."}]}

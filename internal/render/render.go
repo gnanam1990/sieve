@@ -40,7 +40,16 @@ type WalkthroughInput struct {
 	Calibrated    bool // runtime confidence calibration was on
 	InputTokens   int
 	OutputTokens  int
+	Pipeline      string      // "judge"/"ensemble" shown in the footer; "" or "single" hidden
+	RoleTokens    []RoleToken // per-role token breakdown (multi-model pipelines)
 	Version       string
+}
+
+// RoleToken is one pipeline role's token usage, for the footer breakdown.
+type RoleToken struct {
+	Role string
+	In   int
+	Out  int
 }
 
 type truncFlags struct {
@@ -104,6 +113,12 @@ func build(in WalkthroughInput, tr truncFlags) string {
 	}
 
 	extra := ""
+	if in.Pipeline != "" && in.Pipeline != "single" {
+		extra += " · pipeline: " + in.Pipeline
+	}
+	for _, rt := range in.RoleTokens {
+		extra += fmt.Sprintf(" · %s %s/%s", rt.Role, humanK(rt.In), humanK(rt.Out))
+	}
 	if in.Learnings > 0 {
 		extra += fmt.Sprintf(" · learnings: %d rules active", in.Learnings)
 	}

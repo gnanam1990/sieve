@@ -1,8 +1,10 @@
-# Deferred gates — live-validation batch (run after the stage-05 PR merges)
+# Deferred gates — live-validation batch (run after the stage-09 PR merges)
 
-These gates are **deferred, not skipped**. None is "done" until its evidence
-lands in the owning stage's section below. Run in this order in one session;
-tag `stage-05` only when ALL are clear.
+Per the v2 protocol, stages 05–09 are built offline-first and merged on green;
+the live gates below run **once, as a single batch**, after the stage-09 PR
+merges. These gates are **deferred, not skipped**. None is "done" until its
+evidence lands in the owning stage's section below. Run in order in one session;
+push the stage tags (`stage-05` … `stage-09`) as each stage's gates clear.
 
 - [ ] **Batch setup** — fresh credit-capped OpenRouter key in Keychain
   (`openrouter-sieve`), obtained per Addendum 1; verify
@@ -27,6 +29,13 @@ tag `stage-05` only when ALL are clear.
   `sieve learnings` → drafted-rule diff → commit → next run shows
   `learnings: N rules active` and does not re-flag; wipe store → `sieve sync` →
   `sieve stats` matches pre-wipe.
+- [ ] **stage-06 live** — three-run comparison on the seeded sandbox
+  (single/strong, judge fast+strong, single/fast): recall vs plants, precision,
+  per-role tokens, wall time. Judge should beat single/fast on precision at
+  materially lower cost than single/strong; if not, analyze (prompt? judge
+  model? ±3 matching?) **before** the batch proceeds. Plus one live judge
+  `--post` run on a fresh sandbox PR — footer shows per-role tokens +
+  `pipeline: judge`. Populate the README cost/precision table from the results.
 - [ ] **Finalize defaults** — apply the calibration-derived `min_confidence` /
   `inline_min_confidence` as a small reviewed PR (remove the TODO), merge.
 - [ ] **Tag `stage-05`** — only when all the above are clear. Then STOP; next is
@@ -468,4 +477,121 @@ Phase B store/sync/learnings/stats/calibration suites + goldens green.
 All Stage 5 live steps are in the deferred-gate checklist at the top of this
 file (three-push token-savings run; 👎/dismiss → `learnings` → commit →
 `learnings: N active` + no re-flag; wipe → `sync` → `stats` matches). Not run
+offline.
+
+---
+
+# Stage 6 — Multi-Model Pipelines (judge + ensemble)
+
+## Decisions / smallest-reasonable-choice notes
+
+- **Named providers map + roles, singular kept for back-compat.** `providers:`
+  is a name→provider map; `review.roles` selects which name plays each role.
+  The legacy singular `provider:` block normalizes to `providers.default` with
+  `review.roles.reviewer: default` — existing configs need no migration. Setting
+  both is a hard error with a migration hint. `ActiveRoles()` returns only the
+  providers the chosen pipeline actually calls, so a dry run needs none fully
+  configured and `ValidateForReview` only checks the ones that matter.
+- **Shared generation, per-provider run.** `buildGeneration` assembles the
+  batches, anchors, and learnings injection **once**; `runGeneration` runs one
+  provider over them. The single reviewer and the judge's generator call it
+  once; ensemble calls it per member. This keeps the prompt identical across
+  members (real agreement, not prompt drift) and avoids re-fetching file
+  content. All `rc.Stats`/`rc.Findings` mutation happens on the main goroutine
+  after `wg.Wait()`; goroutines only write their own `results[i]` slot.
+- **Judge = liberal generator + verifier.** The generator template is the
+  single-reviewer prompt made explicitly liberal; the judge verifies each
+  finding against the same diff and returns a per-index verdict. Verdicts are
+  strict-decoded (`DisallowUnknownFields`, exactly one verdict per index in
+  `[0,n)`); a malformed response gets one corrective retry, then **fails open**
+  (generator findings pass through untouched, `JudgeFailedOpen` counted) because
+  the noise gate still stands. Severity is clamped: the judge may lower or keep
+  but never raise above the generator's (no judge-invented criticals); an
+  invalid judge severity is ignored; confidence is trusted, clamped to [0,1].
+  Dropped findings are recorded in `JudgeDrops` (JSON output) for transparency.
+- **Judge batches per file.** Verdict indices are per-file `0..n-1`; the judge
+  is called once per file that has findings, so index→finding mapping stays
+  within one file's group. `JudgeUser` self-limits to the 24k budget the same
+  way `BuildBatches` does — drop the content attachment, then truncate hunks.
+- **Ensemble agreement = path + category + side + (±3 line or range overlap).**
+  Side is required (a LEFT and RIGHT anchor at the same number are different
+  lines — a defensible tightening of the spec's path/category/line rule).
+  Union-find clusters; only clusters with ≥2 **distinct** members survive
+  (two findings from one member cannot self-agree). The survivor is the
+  highest-confidence member finding, annotated with the cluster mean
+  (`EnsembleMean` in JSON). Emission is root-sorted for determinism; the gate
+  re-sorts anyway. Ensemble is documented as experimental, 2–3× cost, prefer
+  judge.
+- **Cost guardrail is pre-flight and provider-free.** `review.max_run_tokens`
+  (0 = unlimited) compares the batched-prompt estimate (bytes/4 × multiplier:
+  single 1×, judge 1.6×, ensemble n×) against the cap and refuses with the
+  estimate **before any LLM call**, mapping to exit 1. GitHub reads (diff,
+  contents) already happened in stage-1 build; no provider is touched.
+- **Footer + summary show per-role tokens.** The walkthrough footer adds
+  `pipeline: <p>` and a per-role `role in/out` breakdown for multi-model
+  pipelines (single stays clean — its one row would just restate the aggregate).
+  The stderr summary adds a pipeline line with judge/ensemble counters and a
+  role-ordered token split. `modelLabel` is now role-aware (`+`-joined across
+  active roles) so multi-model runs don't render a blank model.
+
+## Offline gates
+
+`golangci-lint` clean; full suite green `-race -shuffle=on`; overall coverage
+86.0% (≥85); new pipeline code — judge.go 95/92/100/100, ensemble.go 93–100% —
+above the 90 floor. Config matrix (old/new/both, role validation) green. Judge
+E2E (keep / kill / fail-open / empty-generator-skips-judge) + verdict-parse and
+apply-verdict unit tables green. Ensemble E2E + agreement/cluster tables (±3
+boundary, range overlap, same-member-twice, all-disagree, three-way) green.
+Cost-guardrail refuse/allow + multiplier table green. Prompt goldens pinned for
+generator.md, judge.md, judge_user; footer per-role rendering tested.
+
+## Adversarial review
+
+A 5-dimension multi-agent adversarial pass (judge, ensemble, cost/concurrency,
+config/stats, prompt/render/secrets) each finding adversarially verified by a
+second agent that tried to refute it: 6 raw findings, **5 confirmed real** (1
+refuted), all fixed with regression tests. No data races found (concurrency
+dimension confirmed all `rc.Stats`/`rc.Findings` mutation is on the main
+goroutine after `wg.Wait()`; ensemble members run sequentially).
+
+1. **[major] `SIEVE_MODEL` env override silently ignored (back-compat
+   regression).** `applyEnv` ran after `normalizeProviders` and wrote only the
+   orphaned legacy `cfg.Provider`, never the `providers` map the review path
+   reads — so the documented `file < SIEVE_* env` precedence was broken. Fixed:
+   `applyEnv` now writes `SIEVE_MODEL` into the primary active-role provider in
+   the map (and keeps the legacy field coherent). Regression:
+   `TestEnvOverrides` now asserts the map; added
+   `TestEnvModelOverridesJudgeGenerator`.
+2. **[major] `JudgeUser` could strip ALL diff context.** A findings block larger
+   than the batch budget drove the diff budget negative, truncating the diff to
+   zero hunks (and blowing past `maxBatchTokens`) — the judge lost the code it
+   must verify against, then failed open. Fixed: reserve a `minJudgeDiffTokens`
+   (= budget/3) floor so the diff always survives; findings are never dropped
+   (they are what's being judged). Regression:
+   `TestJudgeUserKeepsDiffUnderHugeFindingsBlock`.
+3. **[minor] `EnsembleMean` double-counted a chatty member.** The mean was
+   per-finding, so a member emitting several near-duplicate findings into one
+   cluster skewed the agreement metric upward. Fixed: mean across DISTINCT
+   members (each at its best confidence), matching the field's documented
+   meaning. Regression: `TestEnsembleMeanIsPerMember`.
+4. **[minor] Footer double-counted shared-provider tokens.**
+   `roleTokensForRender` iterated `ActiveRoles()` undeduped, so a judge config
+   with `generator` and `judge` pointing at one provider printed its token row
+   twice (footer disagreed with the stderr summary). Fixed: dedupe by provider
+   name. Regression added to `TestRoleTokensForRender`.
+5. **[nit] Judge omitting `confidence` zeroed a kept finding.** A well-formed
+   verdict that kept a finding but omitted the confidence field decoded as `0.0`
+   and overwrote the generator's confidence, so the noise gate then dropped a
+   judge-approved finding. Fixed: `verdict.Confidence` is now `*float64` —
+   omitted keeps the generator's, explicit `0` is honored. Regression:
+   `TestApplyVerdict` omitted/explicit cases + `TestJudgeVerdictOmittedConfidenceE2E`.
+
+Refuted (1): a claimed off-by-one in the judge's per-file index→finding mapping —
+the verifier traced the index space and confirmed it is per-file and correct.
+
+## Live validation
+
+Deferred to the batch at the top of this file (`stage-06 live`: three-run
+single/judge/ensemble comparison on the seeded sandbox + one live judge `--post`
+run; populate the README cost/precision table from the results). Not run
 offline.

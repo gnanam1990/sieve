@@ -1,0 +1,1 @@
+{"findings":[{"Path":"alpha.txt","Line":3,"Side":"RIGHT","Severity":"minor","Confidence":0.9,"Category":"bug","Title":"Member B: word breaks lexical ordering","Body":"Same underlying bug on line 3."}]}

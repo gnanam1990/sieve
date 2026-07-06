@@ -218,11 +218,38 @@ func TestEnvOverrides(t *testing.T) {
 	if cfg.Review.MaxInlineComments != 20 {
 		t.Errorf("env should override file: got %d", cfg.Review.MaxInlineComments)
 	}
-	if cfg.Review.MinConfidence != 0.5 || cfg.Provider.Model != "env-model" {
-		t.Errorf("env overrides not applied: %+v", cfg)
+	if cfg.Review.MinConfidence != 0.5 {
+		t.Errorf("SIEVE_MIN_CONFIDENCE not applied: %v", cfg.Review.MinConfidence)
+	}
+	// SIEVE_MODEL must reach the provider the review actually calls — the map
+	// entry for the active reviewer role — not just the legacy singular struct.
+	if got := cfg.Providers[cfg.Review.Roles.Reviewer].Model; got != "env-model" {
+		t.Errorf("SIEVE_MODEL did not reach the active provider: got %q via role %q", got, cfg.Review.Roles.Reviewer)
+	}
+	if cfg.Provider.Model != "env-model" {
+		t.Errorf("legacy Provider.Model should stay coherent: %q", cfg.Provider.Model)
 	}
 	if diff := cmp.Diff([]string{"a/**", "b/**"}, cfg.Paths.Exclude); diff != "" {
 		t.Errorf("SIEVE_EXCLUDE mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestEnvModelOverridesJudgeGenerator: SIEVE_MODEL overrides the primary active
+// role (the generator) in a multi-model judge config, reaching the review path.
+func TestEnvModelOverridesJudgeGenerator(t *testing.T) {
+	t.Setenv("SIEVE_MODEL", "env-model")
+	yaml := "review:\n  pipeline: judge\n  roles:\n    generator: gen\n    judge: jdg\n" +
+		"providers:\n  gen:\n    type: anthropic\n    model: file-gen\n    api_key_env: A\n" +
+		"  jdg:\n    type: anthropic\n    model: file-judge\n    api_key_env: B\n"
+	cfg, err := Load(writeConfig(t, yaml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Providers["gen"].Model != "env-model" {
+		t.Errorf("SIEVE_MODEL should override the generator model, got %q", cfg.Providers["gen"].Model)
+	}
+	if cfg.Providers["jdg"].Model != "file-judge" {
+		t.Errorf("SIEVE_MODEL must not touch the judge model, got %q", cfg.Providers["jdg"].Model)
 	}
 }
 

@@ -26,94 +26,185 @@ import (
 // retry after a response that failed the JSON contract.
 const correctiveNote = "\n\nYour previous output was not valid JSON per the contract. Resend the full review as pure JSON — a single object {\"findings\": [...]} with no prose and no code fences."
 
-// newProvider builds the configured provider, wrapped in the shared retry
-// decorator. API keys come exclusively from the env var named by
-// provider.api_key_env.
-func newProvider(cfg config.Config, opts Options, onRetry func()) (provider.Provider, error) {
+// newProviderFrom builds the provider for one named provider config, wrapped
+// in the shared retry decorator. Keys come only from the env var named by
+// api_key_env.
+func newProviderFrom(rp config.Provider, opts Options, onRetry func()) (provider.Provider, error) {
 	var p provider.Provider
-	switch cfg.Provider.Type {
+	switch rp.Type {
 	case "anthropic", "openai-compat":
-		key := os.Getenv(cfg.Provider.APIKeyEnv)
+		key := os.Getenv(rp.APIKeyEnv)
 		if key == "" {
-			return nil, fmt.Errorf("environment variable %s (provider.api_key_env) is unset or empty", cfg.Provider.APIKeyEnv)
+			return nil, fmt.Errorf("environment variable %s (api_key_env) is unset or empty", rp.APIKeyEnv)
 		}
-		if cfg.Provider.Type == "anthropic" {
-			p = anthropic.New(key, cfg.Provider.Model, cfg.Provider.BaseURL)
+		if rp.Type == "anthropic" {
+			p = anthropic.New(key, rp.Model, rp.BaseURL)
 		} else {
-			p = openai.New(key, cfg.Provider.Model, cfg.Provider.BaseURL)
+			p = openai.New(key, rp.Model, rp.BaseURL)
 		}
 	case "fake":
-		p = fake.New(cfg.Provider.Fixture)
+		p = fake.New(rp.Fixture)
 	default:
-		return nil, fmt.Errorf("unknown provider.type %q", cfg.Provider.Type)
+		return nil, fmt.Errorf("unknown provider type %q", rp.Type)
 	}
 	return provider.WithRetry(p, opts.Log, onRetry), nil
 }
 
-// reviewPass runs prompts through the provider over bounded-parallel batches,
-// parses and anchor-validates findings, and merges them into rc. On a delta
-// plan it reviews only the plan's paths and records the delta stats.
-func reviewPass(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg config.Config, opts Options, plan incremental.Plan) error {
-	var retries atomic.Int64
-	p, err := newProvider(cfg, opts, func() { retries.Add(1) })
-	if err != nil {
-		return err
+// generatorRole resolves the provider + system prompt for the generation pass:
+// the single reviewer, or the liberal generator when the judge pipeline is on.
+func generatorRole(cfg config.Config) (rp config.Provider, system, role string, err error) {
+	role = cfg.Review.Roles.Reviewer
+	system, err = prompt.System()
+	if cfg.Review.Pipeline == "judge" {
+		role = cfg.Review.Roles.Generator
+		system, err = prompt.Generator()
 	}
-	system, err := prompt.System()
 	if err != nil {
-		return err
+		return config.Provider{}, "", "", err
 	}
+	rp, ok := cfg.Providers[role]
+	if !ok {
+		return config.Provider{}, "", "", fmt.Errorf("role provider %q is not defined", role)
+	}
+	return rp, system, role, nil
+}
+
+// primaryProvider resolves the provider used for auxiliary LLM tasks such as
+// learnings rule drafting — the first provider the active pipeline calls.
+// ValidateForReview guarantees this role is fully configured.
+func primaryProvider(cfg config.Config) (config.Provider, error) {
+	roles := cfg.ActiveRoles()
+	if len(roles) == 0 {
+		return config.Provider{}, fmt.Errorf("no active provider role for pipeline %q", cfg.Review.Pipeline)
+	}
+	rp, ok := cfg.Providers[roles[0]]
+	if !ok {
+		return config.Provider{}, fmt.Errorf("role provider %q is not defined", roles[0])
+	}
+	return rp, nil
+}
+
+// generation holds the prompt material shared by every generation pass in a
+// run: the same batches, anchors, and learnings injection are reused across the
+// single reviewer, the judge's generator, and every ensemble member.
+type generation struct {
+	batches   []prompt.Batch
+	anchors   *findings.Anchors
+	learnings string // "\n\n"-prefixed injection, appended to each member's system prompt
+}
+
+// buildGeneration assembles the shared prompt material once: learnings
+// injection, the batched prompt input (recorded on rc for the judge), delta
+// stats, and truncation marks. No provider calls happen here.
+func buildGeneration(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg config.Config, opts Options, plan incremental.Plan) generation {
+	var g generation
 	if inj, n := fetchLearnings(ctx, client, rc, opts); inj != "" {
-		system += "\n\n" + inj
+		g.learnings = "\n\n" + inj
 		rc.learningsCount = n
 	}
-
 	input, sent := buildPromptInput(ctx, rc, client, cfg, opts, plan)
+	rc.promptInput = input // reused by the judge pass (same context the generator saw)
 	if !plan.Full {
 		rc.Stats.FilesDeltaReviewed = len(sent)
 		rc.Stats.TokensSaved = estimateTokensSaved(rc, plan)
 	}
-	batches := prompt.BuildBatches(input)
-	markTruncated(rc, batches)
-	anchors := findings.NewAnchors(sent)
+	g.batches = prompt.BuildBatches(input)
+	markTruncated(rc, g.batches)
+	g.anchors = findings.NewAnchors(sent)
+	return g
+}
 
-	timeout := time.Duration(cfg.Provider.TimeoutSeconds) * time.Second
-	results := make([]batchResult, len(batches))
-	sem := make(chan struct{}, cfg.Review.Concurrency)
+// memberResult is one provider's generation outcome over the shared batches.
+type memberResult struct {
+	findings      []findings.Finding
+	requests      int
+	inputTokens   int
+	outputTokens  int
+	batchesFailed int
+	dropped       int
+	retries       int
+}
+
+// runGeneration runs one provider over the shared batches, anchor-validates its
+// findings, and returns the aggregate. Provider construction failure is fatal;
+// per-batch failures are counted, not fatal.
+func runGeneration(ctx context.Context, rp config.Provider, system string, g generation, concurrency int, opts Options) (memberResult, error) {
+	var res memberResult
+	var retries atomic.Int64
+	p, err := newProviderFrom(rp, opts, func() { retries.Add(1) })
+	if err != nil {
+		return res, err
+	}
+	system += g.learnings
+	timeout := time.Duration(rp.TimeoutSeconds) * time.Second
+	results := make([]batchResult, len(g.batches))
+	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
-	for i, b := range batches {
+	for i, b := range g.batches {
 		wg.Add(1)
 		go func(i int, b prompt.Batch) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			results[i] = runBatch(ctx, p, system, b, cfg, timeout)
+			results[i] = runBatch(ctx, p, system, b, rp, timeout)
 		}(i, b)
 	}
 	wg.Wait()
 
 	// Merge in batch order for deterministic output.
 	for i, r := range results {
-		rc.Stats.Requests += r.requests
-		rc.Stats.InputTokens += r.usage.InputTokens
-		rc.Stats.OutputTokens += r.usage.OutputTokens
+		res.requests += r.requests
+		res.inputTokens += r.usage.InputTokens
+		res.outputTokens += r.usage.OutputTokens
 		if r.err != nil {
-			rc.Stats.BatchesFailed++
-			opts.Log.Error("batch failed", "batch", i, "files", strings.Join(batches[i].Files, ","), "err", r.err)
+			res.batchesFailed++
+			opts.Log.Error("batch failed", "batch", i, "files", strings.Join(g.batches[i].Files, ","), "err", r.err)
 			continue
 		}
 		for _, f := range r.findings {
-			if err := anchors.Validate(f); err != nil {
-				rc.Stats.FindingsDropped++
+			if err := g.anchors.Validate(f); err != nil {
+				res.dropped++
 				opts.Log.Debug("finding dropped by anchor gate", "path", f.Path, "line", f.Line, "side", f.Side, "reason", err)
 				continue
 			}
-			rc.Findings = append(rc.Findings, f)
+			res.findings = append(res.findings, f)
 		}
 	}
+	res.retries = int(retries.Load())
+	return res, nil
+}
+
+// reviewPass runs the generation pass(es) for the configured pipeline, applies
+// the cost guardrail first, and leaves the surviving generator findings on rc
+// for the judge/gate downstream. On a delta plan it reviews only the plan's
+// paths and records the delta stats.
+func reviewPass(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg config.Config, opts Options, plan incremental.Plan) error {
+	g := buildGeneration(ctx, rc, client, cfg, opts, plan)
+	if err := enforceRunBudget(cfg, g, opts); err != nil {
+		return err
+	}
+	if cfg.Review.Pipeline == "ensemble" {
+		return ensembleGenerate(ctx, rc, cfg, opts, g)
+	}
+
+	rp, system, role, err := generatorRole(cfg)
+	if err != nil {
+		return err
+	}
+	res, err := runGeneration(ctx, rp, system, g, cfg.Review.Concurrency, opts)
+	if err != nil {
+		return err
+	}
+	rc.Findings = append(rc.Findings, res.findings...)
+	rc.Stats.Requests += res.requests
+	rc.Stats.InputTokens += res.inputTokens
+	rc.Stats.OutputTokens += res.outputTokens
+	rc.Stats.BatchesFailed += res.batchesFailed
+	rc.Stats.FindingsDropped += res.dropped
+	rc.Stats.addRole(role, res.inputTokens, res.outputTokens)
 	findings.Sort(rc.Findings)
 	rc.Stats.FindingsTotal = len(rc.Findings)
-	rc.Stats.Retries = int(retries.Load())
+	rc.Stats.Retries = res.retries
 	return nil
 }
 
@@ -225,13 +316,13 @@ type batchResult struct {
 
 // runBatch performs one provider call, with a single corrective retry if
 // the response violates the JSON contract.
-func runBatch(ctx context.Context, p provider.Provider, system string, b prompt.Batch, cfg config.Config, timeout time.Duration) batchResult {
+func runBatch(ctx context.Context, p provider.Provider, system string, b prompt.Batch, rp config.Provider, timeout time.Duration) batchResult {
 	var r batchResult
 	req := provider.Request{
 		System:      system,
 		User:        b.User,
-		MaxTokens:   cfg.Provider.MaxTokens,
-		Temperature: cfg.Provider.Temperature,
+		MaxTokens:   rp.MaxTokens,
+		Temperature: rp.Temperature,
 	}
 	resp, err := completeWithTimeout(ctx, p, req, timeout)
 	r.requests++

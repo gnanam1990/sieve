@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/gnanam1990/sieve/internal/findings"
 	"github.com/gnanam1990/sieve/internal/gate"
 	"github.com/gnanam1990/sieve/internal/gh"
+	"github.com/gnanam1990/sieve/internal/prompt"
 )
 
 // FileEntry is one file of the PR with its filter decision.
@@ -51,6 +53,36 @@ type Stats struct {
 	FindingsCarriedForward int    `json:",omitempty"` // active findings carried from prior metadata unchanged
 	TokensSaved            int    `json:",omitempty"` // estimated input tokens avoided vs a full re-review
 	FullReviewReason       string `json:",omitempty"` // why a full review ran (delta not taken)
+
+	// Multi-model pipelines (stage 6).
+	Pipeline         string               `json:",omitempty"` // "single" | "judge" | "ensemble"
+	RoleTokens       map[string]RoleUsage `json:",omitempty"` // per-role token accounting
+	JudgeKilled      int                  `json:",omitempty"` // findings the judge dropped
+	JudgeFailedOpen  int                  `json:",omitempty"` // judge batches that fell open (kept generator findings)
+	EnsembleMembers  int                  `json:",omitempty"` // reviewer members that ran in the ensemble
+	EnsembleClusters int                  `json:",omitempty"` // agreement clusters kept (>=2 members)
+	EnsembleDropped  int                  `json:",omitempty"` // findings dropped for lacking a second member
+}
+
+// RoleUsage is one role's token consumption across a run.
+type RoleUsage struct {
+	In  int
+	Out int
+}
+
+// addRole accumulates token usage under a pipeline role name, allocating the
+// map lazily. A single-reviewer run records everything under "reviewer".
+func (s *Stats) addRole(role string, in, out int) {
+	if role == "" {
+		return
+	}
+	if s.RoleTokens == nil {
+		s.RoleTokens = map[string]RoleUsage{}
+	}
+	u := s.RoleTokens[role]
+	u.In += in
+	u.Out += out
+	s.RoleTokens[role] = u
 }
 
 // ReviewContext is the full input a future review pass will consume, and
@@ -58,22 +90,34 @@ type Stats struct {
 //
 //nolint:revive // spec-mandated name; review.Context would shadow context.Context in readers' minds
 type ReviewContext struct {
-	Repo      string
-	PRNumber  int
-	Title     string
-	Body      string `json:",omitempty"`
-	Author    string
-	BaseSHA   string
-	HeadSHA   string
-	Draft     bool
-	Truncated bool
+	Repo        string
+	PRNumber    int
+	Title       string
+	Body        string `json:",omitempty"`
+	Author      string
+	BaseSHA     string
+	HeadSHA     string
+	Draft       bool
+	Truncated   bool
 	Files       []FileEntry
 	Findings    []findings.Finding
 	Gate        *gate.GateResult    `json:",omitempty"` // tier routing + drop/demote counters + fingerprints
 	Calibration []CalibrationRecord `json:",omitempty"` // raw vs calibrated confidence (review.calibration)
+	JudgeDrops  []JudgeDrop         `json:",omitempty"` // findings the judge dropped, with reasons (judge pipeline)
 	Stats       Stats
 
-	learningsCount int // repository rules applied to the prompt (footer)
+	learningsCount int          // repository rules applied to the prompt (footer)
+	promptInput    prompt.Input // context the generator sent; reused by the judge pass
+}
+
+// JudgeDrop records one generator finding the judge rejected, retained for
+// transparency in the JSON output (the finding itself is gone from Findings).
+type JudgeDrop struct {
+	Path   string
+	Line   int
+	Side   findings.Side
+	Title  string
+	Reason string
 }
 
 // CalibrationRecord captures one finding's confidence before and after runtime
@@ -142,9 +186,15 @@ func Run(ctx context.Context, opts Options) (*ReviewContext, error) {
 		return nil, err
 	}
 	rc.Stats.FullReviewReason = plan.FullReason
+	rc.Stats.Pipeline = cfg.Review.Pipeline
 
 	if err := reviewPass(ctx, rc, client, cfg, opts, plan); err != nil {
 		return nil, err
+	}
+	if cfg.Review.Pipeline == "judge" {
+		if err := judgePass(ctx, rc, cfg, opts); err != nil {
+			return nil, err
+		}
 	}
 	if err := gateAndPost(ctx, rc, cfg, opts, kept, plan, prior, poster, loc); err != nil {
 		return nil, err
@@ -327,4 +377,28 @@ func (rc *ReviewContext) WriteSummary(w io.Writer) {
 			rc.Stats.FindingsTotal, rc.Stats.FindingsDropped, rc.Stats.Requests, rc.Stats.Retries,
 			rc.Stats.BatchesFailed, rc.Stats.InputTokens, rc.Stats.OutputTokens)
 	}
+	if rc.Stats.Pipeline != "" && rc.Stats.Pipeline != "single" {
+		fmt.Fprintf(w, "pipeline: %s", rc.Stats.Pipeline)
+		if rc.Stats.Pipeline == "judge" {
+			fmt.Fprintf(w, " (killed %d, failed-open %d)", rc.Stats.JudgeKilled, rc.Stats.JudgeFailedOpen)
+		}
+		if rc.Stats.Pipeline == "ensemble" {
+			fmt.Fprintf(w, " (%d members, %d clusters, %d dropped)", rc.Stats.EnsembleMembers, rc.Stats.EnsembleClusters, rc.Stats.EnsembleDropped)
+		}
+		for _, role := range sortedRoleNames(rc.Stats.RoleTokens) {
+			u := rc.Stats.RoleTokens[role]
+			fmt.Fprintf(w, " · %s %d/%d", role, u.In, u.Out)
+		}
+		fmt.Fprintln(w)
+	}
+}
+
+// sortedRoleNames returns the role keys in deterministic (alphabetical) order.
+func sortedRoleNames(rt map[string]RoleUsage) []string {
+	names := make([]string, 0, len(rt))
+	for name := range rt {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

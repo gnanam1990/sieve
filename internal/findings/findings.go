@@ -59,6 +59,8 @@ type Finding struct {
 	Title      string  // one line, imperative
 	Body       string  // markdown: the why + the fix
 	Suggestion string  `json:",omitempty"` // replacement code for the exact range (rendered stage 3+)
+
+	EnsembleMean float64 `json:",omitempty"` // mean member confidence across the agreement cluster (ensemble pipeline)
 }
 
 // Rank returns a severity's ordinal (0 = critical, 3 = nit); lower is more
@@ -74,6 +76,12 @@ func Rank(s Severity) int {
 // (critical > major > minor > nit).
 func AtLeastAsSevere(s, floor Severity) bool {
 	return Rank(s) <= Rank(floor)
+}
+
+// IsValidSeverity reports whether s is one of the four known severities.
+func IsValidSeverity(s Severity) bool {
+	_, ok := severityRank[s]
+	return ok
 }
 
 // Sort orders findings deterministically: severity (critical first), then

@@ -10,6 +10,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/gnanam1990/sieve/internal/diff"
+	"github.com/gnanam1990/sieve/internal/findings"
 )
 
 func fixtureInput(t *testing.T) Input {
@@ -171,6 +172,120 @@ func TestBuildBatchesTruncatesOversizedFile(t *testing.T) {
 	}
 	if !strings.Contains(b.User, "hunks shown; remainder omitted") {
 		t.Fatal("truncation note missing")
+	}
+}
+
+// TestGeneratorGolden pins the liberal generator prompt (judge pipeline).
+func TestGeneratorGolden(t *testing.T) {
+	gen, err := Generator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, must := range []string{"generator", "liberal", "judge", `{"findings": [`, "R:<n>"} {
+		if !strings.Contains(gen, must) {
+			t.Errorf("generator prompt missing %q", must)
+		}
+	}
+	checkGolden(t, "generator.golden.md", gen)
+}
+
+// TestJudgeSystemGolden pins the judge verification prompt.
+func TestJudgeSystemGolden(t *testing.T) {
+	js := JudgeSystem()
+	for _, must := range []string{"judge", `{"verdicts":`, "keep", "may NOT raise severity", "exactly once"} {
+		if !strings.Contains(js, must) {
+			t.Errorf("judge prompt missing %q", must)
+		}
+	}
+	checkGolden(t, "judge.golden.md", js)
+}
+
+// TestJudgeUserGolden pins the judge's per-file user prompt: the reviewed
+// diff followed by the numbered findings to verify.
+func TestJudgeUserGolden(t *testing.T) {
+	in := fixtureInput(t)
+	var alpha File
+	for _, f := range in.Files {
+		if f.Path == "alpha.txt" {
+			alpha = f
+		}
+	}
+	fs := []findings.Finding{
+		{Path: "alpha.txt", Line: 3, Side: findings.SideRight, Severity: findings.SeverityMajor, Confidence: 0.8, Category: "bug", Title: "Off-by-one on the boundary", Body: "The loop\nreads past the end."},
+		{Path: "alpha.txt", Line: 5, EndLine: 6, Side: findings.SideRight, Severity: findings.SeverityMinor, Confidence: 0.5, Category: "correctness", Title: "Unchecked error", Body: "err is ignored."},
+	}
+	got := JudgeUser(alpha, fs)
+	for _, must := range []string{"## alpha.txt", "## Findings to verify", "[0] Side RIGHT Line 3", "[1] Side RIGHT Line 5-6", "severity=major", "confidence=0.80"} {
+		if !strings.Contains(got, must) {
+			t.Errorf("judge user prompt missing %q", must)
+		}
+	}
+	checkGolden(t, "judge_user.golden.md", got)
+}
+
+// TestJudgeUserTruncatesOversizedFile: the judge context self-limits the same
+// way BuildBatches does — dropping content, then cutting hunks.
+func TestJudgeUserTruncatesOversizedFile(t *testing.T) {
+	var hunks []diff.Hunk
+	for h := 0; h < 40; h++ {
+		var lines []diff.Line
+		for i := 1; i <= 500; i++ {
+			lines = append(lines, diff.Line{Kind: diff.AddedLine, NewNum: h*1000 + i, Content: strings.Repeat("y", 40)})
+		}
+		hunks = append(hunks, diff.Hunk{OldStart: 1, OldLines: 0, NewStart: h*1000 + 1, NewLines: 500, Lines: lines})
+	}
+	huge := File{
+		Path: "huge.go", Status: "modified",
+		Diff:    diff.FileDiff{NewPath: "huge.go", Status: diff.Modified, Hunks: hunks},
+		Content: []byte("should be dropped"),
+	}
+	fs := []findings.Finding{{Path: "huge.go", Line: 1, Side: findings.SideRight, Severity: findings.SeverityMajor, Confidence: 0.9, Category: "bug", Title: "x", Body: "y"}}
+	got := JudgeUser(huge, fs)
+	if estimateTokens(len(got)) > maxBatchTokens {
+		t.Fatalf("judge prompt over budget: %d tokens", estimateTokens(len(got)))
+	}
+	if strings.Contains(got, "Full file content") {
+		t.Fatal("oversized judge context must drop the content attachment")
+	}
+	if !strings.Contains(got, "hunks shown; remainder omitted") {
+		t.Fatal("truncation note missing")
+	}
+	if !strings.Contains(got, "## Findings to verify") {
+		t.Fatal("findings block must survive truncation")
+	}
+}
+
+// TestJudgeUserKeepsDiffUnderHugeFindingsBlock: a findings block larger than
+// the whole batch budget must NOT strip the diff to zero hunks — the judge
+// always keeps at least the reserved diff floor of context.
+func TestJudgeUserKeepsDiffUnderHugeFindingsBlock(t *testing.T) {
+	// A modest diff with several hunks the judge should be able to see.
+	var lines []diff.Line
+	for i := 1; i <= 30; i++ {
+		lines = append(lines, diff.Line{Kind: diff.AddedLine, NewNum: i, Content: "code line " + strings.Repeat("x", 10)})
+	}
+	f := File{Path: "a.go", Status: "modified", Diff: diff.FileDiff{
+		NewPath: "a.go", Status: diff.Modified,
+		Hunks: []diff.Hunk{{OldStart: 1, OldLines: 0, NewStart: 1, NewLines: 30, Lines: lines}},
+	}}
+	// A findings block that alone dwarfs maxBatchTokens (many verbose findings).
+	var fs []findings.Finding
+	for i := 0; i < 400; i++ {
+		fs = append(fs, findings.Finding{
+			Path: "a.go", Line: 1, Side: findings.SideRight, Severity: findings.SeverityMajor,
+			Confidence: 0.7, Category: "bug", Title: "finding number " + strings.Repeat("t", 20),
+			Body: strings.Repeat("why this is a problem and how to fix it. ", 10),
+		})
+	}
+	got := JudgeUser(f, fs)
+	if estimateTokens(len(renderFindings(fs))) <= maxBatchTokens {
+		t.Fatal("test setup: findings block should exceed the batch budget")
+	}
+	if !strings.Contains(got, "R:1 + code line") {
+		t.Error("judge prompt stripped ALL diff context under a huge findings block")
+	}
+	if !strings.Contains(got, "## Findings to verify") {
+		t.Error("findings block must always be present")
 	}
 }
 

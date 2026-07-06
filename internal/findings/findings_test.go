@@ -257,6 +257,19 @@ func TestAtLeastAsSevere(t *testing.T) {
 	}
 }
 
+func TestIsValidSeverity(t *testing.T) {
+	for _, s := range []Severity{SeverityCritical, SeverityMajor, SeverityMinor, SeverityNit} {
+		if !IsValidSeverity(s) {
+			t.Errorf("%q should be valid", s)
+		}
+	}
+	for _, s := range []Severity{"", "blocker", "info", "BUG"} {
+		if IsValidSeverity(s) {
+			t.Errorf("%q should be invalid", s)
+		}
+	}
+}
+
 func TestRightRangeCommentable(t *testing.T) {
 	a := testAnchors()
 	// RIGHT lines present: 1,2,3,4 (hunk 1) and 11,12 (hunk 2).

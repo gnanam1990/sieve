@@ -394,6 +394,13 @@
     "InputTokens": 840,
     "OutputTokens": 187,
     "InlinePostFailed": 0,
-    "FullReviewReason": "read-only run (no prior walkthrough)"
+    "FullReviewReason": "read-only run (no prior walkthrough)",
+    "Pipeline": "single",
+    "RoleTokens": {
+      "default": {
+        "In": 840,
+        "Out": 187
+      }
+    }
   }
 }

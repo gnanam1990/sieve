@@ -167,7 +167,16 @@ func applyEnv(cfg *Config) error {
 		cfg.Review.MinConfidence = f
 	}
 	if v := os.Getenv("SIEVE_MODEL"); v != "" {
-		cfg.Provider.Model = v
+		// Override the model of the provider the review actually calls. applyEnv
+		// runs AFTER normalizeProviders, so writing only the legacy singular
+		// cfg.Provider would be a dead write — the review path reads the map.
+		cfg.Provider.Model = v // keep the legacy field coherent for anyone reading it
+		if roles := cfg.ActiveRoles(); len(roles) > 0 {
+			if p, ok := cfg.Providers[roles[0]]; ok {
+				p.Model = v
+				cfg.Providers[roles[0]] = p
+			}
+		}
 	}
 	if v := os.Getenv("SIEVE_EXCLUDE"); v != "" {
 		for _, g := range strings.Split(v, ",") {

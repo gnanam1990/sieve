@@ -190,6 +190,31 @@ func TestTruncationCascade(t *testing.T) {
 	}
 }
 
+// TestFooterPerRoleTokens: a multi-model pipeline surfaces the pipeline name
+// and each role's token split in the footer.
+func TestFooterPerRoleTokens(t *testing.T) {
+	in := sampleInput()
+	in.Pipeline = "judge"
+	in.RoleTokens = []RoleToken{{Role: "gen", In: 12000, Out: 900}, {Role: "judge", In: 3400, Out: 120}}
+	body := Walkthrough(in)
+	for _, must := range []string{"pipeline: judge", "gen 12.0k/900", "judge 3.4k/120"} {
+		if !strings.Contains(body, must) {
+			t.Errorf("footer missing %q\n%s", must, body)
+		}
+	}
+}
+
+// TestFooterSinglePipelineOmitsRoleBreakdown: the single reviewer footer stays
+// clean — no pipeline label, no per-role line.
+func TestFooterSinglePipelineOmitsRoleBreakdown(t *testing.T) {
+	in := sampleInput()
+	in.Pipeline = "single"
+	body := Walkthrough(in)
+	if strings.Contains(body, "pipeline:") {
+		t.Errorf("single pipeline must not show a pipeline label:\n%s", body)
+	}
+}
+
 func TestHumanK(t *testing.T) {
 	cases := map[int]string{0: "0", 840: "840", 999: "999", 1000: "1.0k", 18234: "18.2k", 1420: "1.4k"}
 	for n, want := range cases {
