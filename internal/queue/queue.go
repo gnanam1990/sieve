@@ -252,10 +252,6 @@ func splitLines(data []byte) [][]byte {
 	return out
 }
 
-// mrandUint64 is a process-wide pseudo-random source for full-jitter backoff.
-// math/rand/v2's top-level functions are safe for concurrent use and auto-seeded.
-func mrandUint64() uint64 { return rand.Uint64() }
-
 // sanitizeLog replaces CR/LF/TAB/NUL in untrusted strings (repo names, error
 // messages that may quote user-controlled payloads) so a slog text-handler
 // cannot be log-forged into splitting one record across many apparent lines.
@@ -311,6 +307,10 @@ func (q *Queue) Enqueue(job Job) error {
 // To force-abort in-flight jobs before the drain timeout, call Shutdown with a
 // short context.
 func (q *Queue) Start(ctx context.Context) {
+	// ctx is intentionally ignored for run-time purposes: workers run on an
+	// internal context that Shutdown cancels only after the drain timeout, so a
+	// SIGTERM cannot abort an in-flight review mid-POST.
+	_ = ctx
 	q.runCtx, q.runCancel = context.WithCancel(context.Background())
 	for i := 0; i < q.workers; i++ {
 		q.loopWg.Add(1)
@@ -379,10 +379,9 @@ func (q *Queue) runWithRetry(ctx context.Context, job Job) error {
 			if base <= 0 {
 				base = time.Millisecond
 			}
-			// Compute jitter in unsigned space; casting a full uint64 directly to
-			// time.Duration can wrap to a negative duration, which would make
-			// time.After fire immediately and collapse the backoff to zero.
-			jitter := time.Duration(mrandUint64() % uint64(base))
+			// Use Int64N so the duration stays non-negative and the conversion is
+			// safe. Pseudo-random jitter is fine here — it is not a security path.
+			jitter := time.Duration(rand.Int64N(int64(base))) //nolint:gosec // jitter, not crypto
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
