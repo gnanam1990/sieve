@@ -407,3 +407,65 @@ four confirmed defects — all fixed and regression-tested:
 Stage 3's calibration (Gate 4 there) is still pending a live model run; the
 default-tuning proposal in the Stage 3 notes stands. Stage 4 adds no new
 gate-tuning surface.
+
+---
+
+# Stage 5 — Incremental Review + Learnings + Local Memory
+
+New packages: `internal/incremental` (delta planning), `internal/memory`
+(outcome store + aggregation), `internal/learnings` (clustering + rule
+drafting). `internal/gate` metadata went v1→v2; new subcommands `sync`,
+`learnings`, `stats`.
+
+## Decisions / smallest-reasonable-choice notes
+
+- **Compact record carries category + endline + tier** beyond the spec's
+  `{f,p,l,sd,s,c,t,cid}`: category is required to recompute the content
+  fingerprint for the anchor-gone resolution check (R4's fp includes category);
+  endline preserves ranges; tier drives the cap-overflow eviction. Title is
+  stored **in full** (findings already bound it to ≤120), not truncated to 80 —
+  truncation would break the anchor-gone fingerprint recompute.
+- **Meta marker is version-agnostic** (`<!-- sieve:meta ` locator + a `vN`
+  display token) so a v2 sieve still reads v1 walkthroughs; the schema version
+  lives in the JSON `v` field.
+- **Delta only on differing head SHA + v2 prior + `--post`.** Same SHA →
+  full review (preserves stage-3 idempotency). Non-post runs are always full (no
+  prior walkthrough to delta from). Full-fallback reasons are recorded.
+- **Inline review posts before the walkthrough** (order change from stage 3) so
+  comment IDs can be recovered (via the versioned, defensively-parsed
+  `<!-- sieve:fp v1 … -->` marker, validated as 16-hex) and stamped into the v2
+  metadata this run. Failure model unchanged: partial inline → exit 2 (still
+  posts the walkthrough); walkthrough failure → exit 1.
+- **Reactions are per-comment snapshots** (latest wins in aggregation), so
+  re-running a review never double-counts. Fetched from the REST comment list
+  (inline cids only). **Dismissals** need thread-resolution state, which REST
+  cannot report, so one pinned GraphQL query (`internal/gh/graphql.go`,
+  `ResolvedThreads`) reads it — a read POST to `/graphql`, allowlisted in the
+  posting-isolation test (not a REST mutation).
+- **`sieve sync` reconstruction limits.** Run/token history is live-only
+  telemetry (not on GitHub) and is omitted. A posted finding no longer active is
+  reconstructed as anchor-gone (the common "fixed" case); the live
+  re-review-absent nuance (the model changed its mind on a re-reviewed file) is
+  not distinguishable from GitHub. Learnings clusters and reaction/dismissal
+  aggregates reconstruct exactly — the equivalence test compares aggregates, not
+  bytes, and covers idempotency. Rewrite is atomic (temp + rename).
+- **`memoryHost` is `github.com`** (sieve targets github.com only today); derive
+  from the API base URL when GHE support lands.
+- **Calibration and launch-tuning are distinct.** `review.calibration` is the
+  runtime, opt-in, per-category confidence scaler. The *shipping* defaults for
+  `min_confidence` / `inline_min_confidence` are finalized from the stage-03
+  gate-4 report in the live batch — a `// TODO(calibration)` marks the site.
+
+## Offline gates
+
+`make lint` clean; `make test` green `-race -shuffle=on`; coverage floors met —
+incremental 100%, memory 92%, gate 94%, fingerprint 100%, render 90.7%, post
+88.5%, overall 87.9% (all ≥ their floors). Phase A delta matrix + goldens and
+Phase B store/sync/learnings/stats/calibration suites + goldens green.
+
+## Live validation
+
+All Stage 5 live steps are in the deferred-gate checklist at the top of this
+file (three-push token-savings run; 👎/dismiss → `learnings` → commit →
+`learnings: N active` + no re-flag; wipe → `sync` → `stats` matches). Not run
+offline.
