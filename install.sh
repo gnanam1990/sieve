@@ -38,8 +38,17 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
 echo "downloading ${asset} (${VERSION})..."
-curl -fsSL "${base}/${asset}" -o "${tmp}/${asset}" || die "download failed: ${base}/${asset}"
-curl -fsSL "${base}/checksums.txt" -o "${tmp}/checksums.txt" || die "download failed: checksums.txt"
+# Prefer the authenticated gh CLI when available: it works for private repos and
+# public repos alike. Fall back to the public release URL so the one-liner still
+# works on machines without gh.
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+	gh release download "${VERSION}" --repo "${REPO}" \
+		--pattern "${asset}" --pattern "checksums.txt" --dir "${tmp}" \
+		|| die "download failed via gh release download ${VERSION}"
+else
+	curl -fsSL "${base}/${asset}" -o "${tmp}/${asset}" || die "download failed: ${base}/${asset}"
+	curl -fsSL "${base}/checksums.txt" -o "${tmp}/checksums.txt" || die "download failed: checksums.txt"
+fi
 
 # `|| true` keeps a no-match (grep exit 1) from aborting under `set -e`/pipefail
 # before the friendly die message below.

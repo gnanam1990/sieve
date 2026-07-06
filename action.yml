@@ -86,7 +86,11 @@ runs:
           *) echo "::error::unsupported architecture: $arch"; exit 1 ;;
         esac
         asset="sieve_${os}_${arch}"
-        repo="${GITHUB_ACTION_REPOSITORY:-$GITHUB_REPOSITORY}"
+        # GITHUB_ACTION_REPOSITORY is the repo that owns the action
+        # (gnanam1990/sieve), not the repo running the workflow. Use it explicitly
+        # because GITHUB_REPOSITORY is the caller's repo and will not have the
+        # sieve release assets.
+        repo="${GITHUB_ACTION_REPOSITORY:-gnanam1990/sieve}"
         tmp="$(mktemp -d)"
 
         echo "downloading ${asset} @ ${VERSION} from ${repo}"
