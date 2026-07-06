@@ -1,0 +1,1 @@
+{"findings":[{"Path":"alpha.txt","Line":40,"Side":"RIGHT","Severity":"major","Confidence":0.6,"Category":"bug","Title":"Member C: lonely finding far away","Body":"No other member agrees on line 40."}]}

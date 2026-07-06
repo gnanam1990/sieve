@@ -116,6 +116,8 @@ func gateAndPost(ctx context.Context, rc *ReviewContext, cfg config.Config, opts
 		Calibrated:    cfg.Review.Calibration,
 		InputTokens:   rc.Stats.InputTokens,
 		OutputTokens:  rc.Stats.OutputTokens,
+		Pipeline:      cfg.Review.Pipeline,
+		RoleTokens:    roleTokensForRender(cfg, rc.Stats),
 		Version:       version.Version,
 	})
 	if err := poster.UpsertWalkthrough(ctx, loc, walkthrough); err != nil {
@@ -159,9 +161,47 @@ func skippedFiles(rc *ReviewContext) []render.SkippedFile {
 
 // modelLabel names the model for the walkthrough footer, falling back to the
 // provider type when no model is configured (e.g. the fake provider).
+// modelLabel names the model(s) behind the active pipeline: the single
+// reviewer's model, or a "+"-joined label across the roles a multi-model
+// pipeline calls (generator+judge, or the ensemble members).
 func modelLabel(cfg config.Config) string {
-	if cfg.Provider.Model != "" {
-		return cfg.Provider.Model
+	var models []string
+	seen := map[string]bool{}
+	for _, name := range cfg.ActiveRoles() {
+		p, ok := cfg.Providers[name]
+		if !ok {
+			continue
+		}
+		m := p.Model
+		if m == "" {
+			m = p.Type
+		}
+		if m != "" && !seen[m] {
+			seen[m] = true
+			models = append(models, m)
+		}
 	}
-	return cfg.Provider.Type
+	return strings.Join(models, "+")
+}
+
+// roleTokensForRender converts the per-role token map into a deterministic,
+// role-ordered slice for the footer — only for multi-model pipelines, where the
+// breakdown is informative (a single reviewer's row would just restate the
+// aggregate).
+func roleTokensForRender(cfg config.Config, st Stats) []render.RoleToken {
+	if cfg.Review.Pipeline == "single" || len(st.RoleTokens) == 0 {
+		return nil
+	}
+	out := make([]render.RoleToken, 0, len(st.RoleTokens))
+	seen := map[string]bool{}
+	for _, name := range cfg.ActiveRoles() {
+		if seen[name] {
+			continue // two roles can share one provider; count it once
+		}
+		if u, ok := st.RoleTokens[name]; ok {
+			seen[name] = true
+			out = append(out, render.RoleToken{Role: name, In: u.In, Out: u.Out})
+		}
+	}
+	return out
 }

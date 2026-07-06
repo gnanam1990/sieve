@@ -43,6 +43,18 @@ type Review struct {
 
 	Incremental bool `yaml:"incremental"` // delta re-review of only changed files (stage 5)
 	Calibration bool `yaml:"calibration"` // runtime confidence calibration from addressed-rate (stage 5, opt-in)
+
+	Pipeline string `yaml:"pipeline"` // single | judge | ensemble (stage 6)
+	Roles    Roles  `yaml:"roles"`    // which named provider fills each role
+	MaxRunTokens int `yaml:"max_run_tokens"` // pre-flight token budget; 0 = unlimited
+}
+
+// Roles binds pipeline roles to named providers (stage 6).
+type Roles struct {
+	Reviewer  string   `yaml:"reviewer"`  // single pipeline
+	Generator string   `yaml:"generator"` // judge pipeline
+	Judge     string   `yaml:"judge"`     // judge pipeline
+	Ensemble  []string `yaml:"ensemble"`  // ensemble pipeline (2..3 members)
 }
 
 // Provider holds LLM provider selection. There is deliberately no api_key
@@ -61,9 +73,16 @@ type Provider struct {
 
 // Config is the full .sieve.yml schema.
 type Config struct {
-	Paths    Paths    `yaml:"paths"`
-	Review   Review   `yaml:"review"`
-	Provider Provider `yaml:"provider"`
+	Paths     Paths               `yaml:"paths"`
+	Review    Review              `yaml:"review"`
+	Provider  Provider            `yaml:"provider"`  // legacy singular; mapped to providers.default
+	Providers map[string]Provider `yaml:"providers"` // named provider map (stage 6)
+}
+
+// ProviderFor returns the provider bound to a role name.
+func (c Config) ProviderFor(name string) (Provider, bool) {
+	p, ok := c.Providers[name]
+	return p, ok
 }
 
 // Default returns the built-in defaults.
@@ -82,6 +101,7 @@ func Default() Config {
 			ReviewDrafts:        false,
 			Incremental:         true,
 			Calibration:         false,
+			Pipeline:            "single",
 		},
 		Provider: Provider{ //nolint:gosec // G101: APIKeyEnv holds the NAME of an env var, never a credential
 			Type:           "anthropic",
@@ -99,6 +119,7 @@ func Default() Config {
 func Load(path string) (Config, error) {
 	cfg := Default()
 
+	hasSingular, hasMap := false, false
 	data, err := os.ReadFile(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -106,6 +127,11 @@ func Load(path string) (Config, error) {
 	case err != nil:
 		return cfg, fmt.Errorf("read config: %w", err)
 	default:
+		var probe map[string]yaml.Node
+		if err := yaml.Unmarshal(data, &probe); err == nil {
+			_, hasSingular = probe["provider"]
+			_, hasMap = probe["providers"]
+		}
 		dec := yaml.NewDecoder(strings.NewReader(string(data)))
 		dec.KnownFields(true)
 		if err := dec.Decode(&cfg); err != nil {
@@ -113,6 +139,9 @@ func Load(path string) (Config, error) {
 		}
 	}
 
+	if err := normalizeProviders(&cfg, hasSingular, hasMap); err != nil {
+		return cfg, err
+	}
 	if err := applyEnv(&cfg); err != nil {
 		return cfg, err
 	}
@@ -138,7 +167,16 @@ func applyEnv(cfg *Config) error {
 		cfg.Review.MinConfidence = f
 	}
 	if v := os.Getenv("SIEVE_MODEL"); v != "" {
-		cfg.Provider.Model = v
+		// Override the model of the provider the review actually calls. applyEnv
+		// runs AFTER normalizeProviders, so writing only the legacy singular
+		// cfg.Provider would be a dead write — the review path reads the map.
+		cfg.Provider.Model = v // keep the legacy field coherent for anyone reading it
+		if roles := cfg.ActiveRoles(); len(roles) > 0 {
+			if p, ok := cfg.Providers[roles[0]]; ok {
+				p.Model = v
+				cfg.Providers[roles[0]] = p
+			}
+		}
 	}
 	if v := os.Getenv("SIEVE_EXCLUDE"); v != "" {
 		for _, g := range strings.Split(v, ",") {
@@ -175,40 +213,159 @@ func (c Config) Validate() error {
 	if c.Review.Concurrency < 1 || c.Review.Concurrency > 8 {
 		return fmt.Errorf("review.concurrency must be between 1 and 8, got %d", c.Review.Concurrency)
 	}
-	switch c.Provider.Type {
+	if c.Review.MaxRunTokens < 0 {
+		return fmt.Errorf("review.max_run_tokens must be >= 0, got %d", c.Review.MaxRunTokens)
+	}
+	for name, p := range c.Providers {
+		if err := validateProviderRanges(name, p); err != nil {
+			return err
+		}
+	}
+	return c.validatePipeline()
+}
+
+// validateProviderRanges checks one named provider's value ranges.
+func validateProviderRanges(name string, p Provider) error {
+	switch p.Type {
 	case "anthropic", "openai-compat", "fake":
 	default:
-		return fmt.Errorf("provider.type must be anthropic, openai-compat, or fake; got %q", c.Provider.Type)
+		return fmt.Errorf("providers.%s.type must be anthropic, openai-compat, or fake; got %q", name, p.Type)
 	}
-	if c.Provider.MaxTokens < 256 || c.Provider.MaxTokens > 32768 {
-		return fmt.Errorf("provider.max_tokens must be between 256 and 32768, got %d", c.Provider.MaxTokens)
+	if p.MaxTokens < 256 || p.MaxTokens > 32768 {
+		return fmt.Errorf("providers.%s.max_tokens must be between 256 and 32768, got %d", name, p.MaxTokens)
 	}
-	if c.Provider.Temperature < 0 || c.Provider.Temperature > 1 {
-		return fmt.Errorf("provider.temperature must be between 0 and 1, got %g", c.Provider.Temperature)
+	if p.Temperature < 0 || p.Temperature > 1 {
+		return fmt.Errorf("providers.%s.temperature must be between 0 and 1, got %g", name, p.Temperature)
 	}
-	if c.Provider.TimeoutSeconds < 10 || c.Provider.TimeoutSeconds > 600 {
-		return fmt.Errorf("provider.timeout_seconds must be between 10 and 600, got %d", c.Provider.TimeoutSeconds)
+	if p.TimeoutSeconds < 10 || p.TimeoutSeconds > 600 {
+		return fmt.Errorf("providers.%s.timeout_seconds must be between 10 and 600, got %d", name, p.TimeoutSeconds)
 	}
 	return nil
 }
 
-// ValidateForReview checks the requirements that only matter when an LLM
-// call is about to happen (a dry run never needs a model or key name).
+// validatePipeline checks the pipeline selection and that its roles reference
+// defined providers.
+func (c Config) validatePipeline() error {
+	switch c.Review.Pipeline {
+	case "single":
+		return c.requireRole(c.Review.Roles.Reviewer, "reviewer")
+	case "judge":
+		if err := c.requireRole(c.Review.Roles.Generator, "generator"); err != nil {
+			return err
+		}
+		return c.requireRole(c.Review.Roles.Judge, "judge")
+	case "ensemble":
+		if n := len(c.Review.Roles.Ensemble); n < 2 || n > 3 {
+			return fmt.Errorf("pipeline ensemble requires 2..3 members in review.roles.ensemble, got %d", n)
+		}
+		for _, m := range c.Review.Roles.Ensemble {
+			if _, ok := c.Providers[m]; !ok {
+				return fmt.Errorf("review.roles.ensemble references undefined provider %q", m)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("review.pipeline must be single, judge, or ensemble; got %q", c.Review.Pipeline)
+	}
+}
+
+func (c Config) requireRole(name, role string) error {
+	if name == "" {
+		return fmt.Errorf("review.roles.%s is required for pipeline %q", role, c.Review.Pipeline)
+	}
+	if _, ok := c.Providers[name]; !ok {
+		return fmt.Errorf("review.roles.%s references undefined provider %q", role, name)
+	}
+	return nil
+}
+
+// normalizeProviders reconciles the legacy singular `provider:` with the new
+// `providers:` map: both present is a hard error; only the singular (or the
+// built-in default) maps to providers.default with roles.reviewer=default; and
+// every named provider gets the built-in defaults filled in for unset fields.
+func normalizeProviders(cfg *Config, hasSingular, hasMap bool) error {
+	if hasSingular && hasMap {
+		return fmt.Errorf("config sets both 'provider' and 'providers' — use one. " +
+			"Migration: move the 'provider:' block under 'providers:' as a named entry " +
+			"(e.g. providers.default) and set review.roles.reviewer to that name")
+	}
+	if !hasMap {
+		if cfg.Providers == nil {
+			cfg.Providers = map[string]Provider{}
+		}
+		cfg.Providers["default"] = cfg.Provider
+		if cfg.Review.Roles.Reviewer == "" {
+			cfg.Review.Roles.Reviewer = "default"
+		}
+	}
+	for name, p := range cfg.Providers {
+		applyProviderDefaults(&p)
+		cfg.Providers[name] = p
+	}
+	return nil
+}
+
+// applyProviderDefaults fills the built-in defaults for a named provider's
+// unset fields (temperature 0 is left as-is — a valid deterministic setting).
+func applyProviderDefaults(p *Provider) {
+	if p.Type == "" {
+		p.Type = "anthropic"
+	}
+	if p.MaxTokens == 0 {
+		p.MaxTokens = 4096
+	}
+	if p.TimeoutSeconds == 0 {
+		p.TimeoutSeconds = 120
+	}
+	if p.APIKeyEnv == "" && p.Type == "anthropic" {
+		p.APIKeyEnv = "ANTHROPIC_API_KEY"
+	}
+}
+
+// ActiveRoles returns the provider names the current pipeline will actually
+// call (a dry run needs none of them fully configured).
+func (c Config) ActiveRoles() []string {
+	switch c.Review.Pipeline {
+	case "judge":
+		return []string{c.Review.Roles.Generator, c.Review.Roles.Judge}
+	case "ensemble":
+		return c.Review.Roles.Ensemble
+	default:
+		return []string{c.Review.Roles.Reviewer}
+	}
+}
+
+// ValidateForReview checks the requirements that only matter when an LLM call
+// is about to happen (a dry run never needs a model or key name), for every
+// provider the active pipeline will call.
 func (c Config) ValidateForReview() error {
-	switch c.Provider.Type {
+	for _, name := range c.ActiveRoles() {
+		p, ok := c.Providers[name]
+		if !ok {
+			return fmt.Errorf("role references undefined provider %q", name)
+		}
+		if err := validateProviderForReview(name, p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateProviderForReview(name string, p Provider) error {
+	switch p.Type {
 	case "anthropic", "openai-compat":
-		if c.Provider.Model == "" {
-			return fmt.Errorf("provider.model is required for provider.type %q", c.Provider.Type)
+		if p.Model == "" {
+			return fmt.Errorf("providers.%s.model is required for type %q", name, p.Type)
 		}
-		if c.Provider.APIKeyEnv == "" {
-			return fmt.Errorf("provider.api_key_env is required for provider.type %q", c.Provider.Type)
+		if p.APIKeyEnv == "" {
+			return fmt.Errorf("providers.%s.api_key_env is required for type %q", name, p.Type)
 		}
-		if c.Provider.Type == "openai-compat" && c.Provider.BaseURL == "" {
-			return fmt.Errorf("provider.base_url is required for provider.type openai-compat (e.g. https://api.openai.com/v1, http://localhost:11434/v1)")
+		if p.Type == "openai-compat" && p.BaseURL == "" {
+			return fmt.Errorf("providers.%s.base_url is required for type openai-compat (e.g. https://api.openai.com/v1)", name)
 		}
 	case "fake":
-		if c.Provider.Fixture == "" {
-			return fmt.Errorf("provider.fixture is required for provider.type fake")
+		if p.Fixture == "" {
+			return fmt.Errorf("providers.%s.fixture is required for type fake", name)
 		}
 	}
 	return nil

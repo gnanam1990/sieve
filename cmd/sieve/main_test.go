@@ -96,7 +96,7 @@ func TestReviewWithoutProviderConfigFails(t *testing.T) {
 	if code != exitError {
 		t.Fatalf("exit %d, want %d", code, exitError)
 	}
-	if !strings.Contains(errOut.String(), "provider.model") {
+	if !strings.Contains(errOut.String(), "providers.default.model") {
 		t.Fatalf("error should name the missing config key: %s", errOut.String())
 	}
 }

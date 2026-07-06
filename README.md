@@ -307,6 +307,91 @@ never go somewhere you didn't name. Knobs: `max_tokens` (256–32768, default
 120, per request). Retries: 429/5xx/Anthropic-overloaded are retried up to 3
 attempts with backoff + jitter, honoring `Retry-After`.
 
+## Multi-model pipelines
+
+By default sieve runs **one** model as the reviewer (the `single` pipeline).
+For higher precision you can name several providers and route them into a
+**judge** or **ensemble** pipeline.
+
+### The providers map
+
+Give each model a name under `providers:`, then point `review.roles` at those
+names:
+
+```yaml
+providers:
+  fast:
+    type: openai-compat
+    model: qwen/qwen3-coder-next
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+  strong:
+    type: anthropic
+    model: claude-sonnet-5
+    api_key_env: ANTHROPIC_API_KEY
+
+review:
+  pipeline: judge
+  roles:
+    generator: fast    # proposes liberally
+    judge: strong      # verifies against the code, drops the weak ones
+```
+
+The legacy single `provider:` block still works and is equivalent to a
+`providers.default` entry with `review.roles.reviewer: default` — **no migration
+needed** to keep your current config. Setting *both* `provider:` and
+`providers:` is a hard error. To migrate by hand, move the `provider:` block
+under `providers:` as a named entry and select it with a role.
+
+### Pipeline selection guide
+
+| Pipeline | What it does | Cost | Use when |
+|---|---|---|---|
+| `single` | one reviewer | 1× | the default; fast and cheap |
+| `judge` | a liberal generator proposes, a second model verifies each finding against the code (may lower severity/confidence or drop, **never** invents a more-severe finding) | ~1.6× | you want fewer false positives without paying for a strong model on every token — **the recommended upgrade** |
+| `ensemble` | 2–3 reviewers run independently; only findings ≥2 of them agree on survive | 2–3× | experimental; you want a recall/precision study, not day-to-day CI |
+
+Relative cost/precision numbers from the seeded-sandbox comparison are
+_populated at the live-validation batch_ (placeholder until then).
+
+### Judge pipeline
+
+The generator is prompted to be liberal — propose every plausible issue — and
+the judge verifies each candidate against the same diff the generator saw,
+returning a keep/drop verdict with a recalibrated confidence and (never raised)
+severity. Malformed judge output triggers one corrective retry; a second
+failure **fails open** (the generator's findings pass through untouched) because
+the noise gate still stands downstream. Dropped findings are recorded in the
+JSON output for transparency, and the walkthrough footer shows per-role tokens
+and `pipeline: judge`.
+
+### Ensemble pipeline (experimental)
+
+> ⚠️ **Experimental, 2–3× token cost.** Ensemble runs the whole review 2–3
+> times. For almost every real use case the **judge** pipeline gives you better
+> precision per token — prefer it. Ensemble exists for measuring agreement, not
+> for cheap CI.
+
+```yaml
+review:
+  pipeline: ensemble
+  roles:
+    ensemble: [fast, strong, other]   # 2..3 members
+```
+
+Findings agree when they share a path, category, and diff side with lines within
+±3 (or overlapping ranges). Agreement clusters backed by ≥2 distinct members
+survive, carrying the highest-confidence member finding plus the cluster's mean
+confidence (`EnsembleMean` in JSON).
+
+### Cost guardrail
+
+`review.max_run_tokens` (optional, 0 = unlimited) refuses a run whose pre-flight
+token estimate — the batched prompt bytes over ~4 bytes/token, times the
+pipeline multiplier (single 1×, judge 1.6×, ensemble n×) — exceeds the cap. It
+exits `1` **before calling any provider**, so a surprise-large PR can't quietly
+run up a judge/ensemble bill.
+
 ## Findings schema
 
 Each finding in `Findings[]`:

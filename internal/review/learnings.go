@@ -44,7 +44,11 @@ func Learnings(ctx context.Context, opts Options) (string, error) {
 	if err := cfg.ValidateForReview(); err != nil {
 		return "", err
 	}
-	p, err := newProvider(cfg, opts, func() {})
+	rp, err := primaryProvider(cfg)
+	if err != nil {
+		return "", err
+	}
+	p, err := newProviderFrom(rp, opts, func() {})
 	if err != nil {
 		return "", err
 	}
@@ -52,7 +56,7 @@ func Learnings(ctx context.Context, opts Options) (string, error) {
 	ym := yearMonth(opts.now())
 	var rules []learnings.Rule
 	for _, c := range clusters {
-		r, err := learnings.DraftRule(ctx, p, cfg.Provider.MaxTokens, cfg.Provider.Temperature, c)
+		r, err := learnings.DraftRule(ctx, p, rp.MaxTokens, rp.Temperature, c)
 		if err != nil {
 			opts.Log.Warn("skipping cluster: rule draft failed validation", "category", c.Category, "area", c.PathPrefix, "err", err)
 			continue

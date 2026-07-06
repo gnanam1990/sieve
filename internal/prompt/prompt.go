@@ -15,18 +15,78 @@ import (
 //go:embed templates/system.md
 var systemTemplate string
 
-// System renders the embedded reviewer system prompt.
-func System() (string, error) {
-	tpl, err := template.New("system").Parse(systemTemplate)
+//go:embed templates/generator.md
+var generatorTemplate string
+
+//go:embed templates/judge.md
+var judgeTemplate string
+
+// System renders the embedded single-reviewer system prompt.
+func System() (string, error) { return renderTitled("system", systemTemplate) }
+
+// Generator renders the liberal generator system prompt (judge pipeline).
+func Generator() (string, error) { return renderTitled("generator", generatorTemplate) }
+
+// JudgeSystem returns the judge system prompt (no template variables).
+func JudgeSystem() string { return judgeTemplate }
+
+// renderTitled renders a template whose only variable is MaxTitleLen.
+func renderTitled(name, tpl string) (string, error) {
+	t, err := template.New(name).Parse(tpl)
 	if err != nil {
-		return "", fmt.Errorf("parse system template: %w", err)
+		return "", fmt.Errorf("parse %s template: %w", name, err)
 	}
 	var sb strings.Builder
-	err = tpl.Execute(&sb, struct{ MaxTitleLen int }{findings.MaxTitleLen})
-	if err != nil {
-		return "", fmt.Errorf("render system template: %w", err)
+	if err := t.Execute(&sb, struct{ MaxTitleLen int }{findings.MaxTitleLen}); err != nil {
+		return "", fmt.Errorf("render %s template: %w", name, err)
 	}
 	return sb.String(), nil
+}
+
+// minJudgeDiffTokens is the diff-context floor the judge always keeps, even
+// when the findings block is large. The judge is worthless without code to
+// verify against, so the findings budget can never squeeze the diff below this.
+const minJudgeDiffTokens = maxBatchTokens / 3
+
+// JudgeUser builds the judge's per-file user prompt: the file's annotated diff
+// (the same context the generator saw) followed by the numbered findings to
+// verify by index. It trims the diff the same way BuildBatches does — dropping
+// the content attachment, then truncating hunks — but always reserves at least
+// minJudgeDiffTokens of diff so a large findings block can never strip the
+// judge of the code it must verify against. (An unusually large findings block
+// may push the total over maxBatchTokens; the findings themselves are never
+// dropped — they are the thing being judged.)
+func JudgeUser(f File, fs []findings.Finding) string {
+	findingsBlock := renderFindings(fs)
+	budget := maxBatchTokens - estimateTokens(len(findingsBlock))
+	if budget < minJudgeDiffTokens {
+		budget = minJudgeDiffTokens
+	}
+	section := renderFile(f)
+	if estimateTokens(len(section)) > budget {
+		f.Content = nil // drop the full-file attachment first
+		section = renderFile(f)
+		if estimateTokens(len(section)) > budget {
+			section = renderFileTruncated(f, budget)
+		}
+	}
+	return section + findingsBlock
+}
+
+// renderFindings numbers the generator's findings for the judge to verify by
+// index — the same order the verdicts must come back in.
+func renderFindings(fs []findings.Finding) string {
+	var b strings.Builder
+	b.WriteString("\n## Findings to verify\n\n")
+	for i, fn := range fs {
+		fmt.Fprintf(&b, "[%d] Side %s Line %d", i, fn.Side, fn.Line)
+		if fn.EndLine > 0 {
+			fmt.Fprintf(&b, "-%d", fn.EndLine)
+		}
+		fmt.Fprintf(&b, " severity=%s confidence=%.2f category=%s\n    %s\n    %s\n\n",
+			fn.Severity, fn.Confidence, fn.Category, fn.Title, strings.ReplaceAll(strings.TrimSpace(fn.Body), "\n", " "))
+	}
+	return b.String()
 }
 
 // maxBatchTokens is the greedy-packing target for estimated input tokens

@@ -23,8 +23,14 @@ func TestLoadMissingFileUsesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diff := cmp.Diff(Default(), cfg); diff != "" {
+	// Load normalizes the legacy provider into providers.default.
+	want := Default()
+	_ = normalizeProviders(&want, false, false)
+	if diff := cmp.Diff(want, cfg); diff != "" {
 		t.Errorf("defaults mismatch (-want +got):\n%s", diff)
+	}
+	if _, ok := cfg.Providers["default"]; !ok || cfg.Review.Roles.Reviewer != "default" {
+		t.Fatalf("legacy default not mapped: %+v", cfg)
 	}
 }
 
@@ -52,8 +58,83 @@ provider:
 	want.Review.InlineMinConfidence = 0.9
 	want.Review.InlineMinSeverity = "critical"
 	want.Provider.Model = "some-model"
+	_ = normalizeProviders(&want, true, false) // legacy provider block present
 	if diff := cmp.Diff(want, cfg); diff != "" {
 		t.Errorf("config mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestProviderFormsMatrix: the legacy singular block, the new providers map,
+// and the both-present hard error (R1 back-compat).
+func TestProviderFormsMatrix(t *testing.T) {
+	// Legacy singular -> providers.default + roles.reviewer=default.
+	old, err := Load(writeConfig(t, "provider:\n  type: anthropic\n  model: m\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := old.Providers["default"]; p.Model != "m" || old.Review.Roles.Reviewer != "default" {
+		t.Fatalf("legacy mapping wrong: %+v roles=%+v", old.Providers, old.Review.Roles)
+	}
+
+	// New providers map + judge pipeline.
+	neu, err := Load(writeConfig(t, `
+providers:
+  fast:
+    type: openai-compat
+    base_url: https://openrouter.ai/api/v1
+    model: cheap
+    api_key_env: OPENROUTER_API_KEY
+  strong:
+    type: anthropic
+    model: claude-sonnet-4-6
+    api_key_env: ANTHROPIC_API_KEY
+review:
+  pipeline: judge
+  roles:
+    generator: fast
+    judge: strong
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(neu.Providers) != 2 || neu.Review.Pipeline != "judge" {
+		t.Fatalf("new form wrong: %+v", neu.Review)
+	}
+	if p := neu.Providers["fast"]; p.MaxTokens != 4096 || p.TimeoutSeconds != 120 {
+		t.Fatalf("named provider defaults not filled: %+v", p)
+	}
+	if err := neu.ValidateForReview(); err != nil {
+		t.Fatalf("judge config should validate for review: %v", err)
+	}
+
+	// Both present -> hard error with a migration hint.
+	_, err = Load(writeConfig(t, "provider:\n  model: m\nproviders:\n  default:\n    type: anthropic\n    model: m\n"))
+	if err == nil || !strings.Contains(err.Error(), "both") {
+		t.Fatalf("both forms must hard-error: %v", err)
+	}
+}
+
+// TestPipelineRoleValidation covers the role/pipeline validation rules.
+func TestPipelineRoleValidation(t *testing.T) {
+	base := "providers:\n  a:\n    type: anthropic\n    model: m\n  b:\n    type: anthropic\n    model: m\n"
+	cases := map[string]string{
+		"bad pipeline":         base + "review:\n  pipeline: quad\n  roles:\n    reviewer: a\n",
+		"single unknown role":  base + "review:\n  pipeline: single\n  roles:\n    reviewer: nope\n",
+		"judge missing judge":  base + "review:\n  pipeline: judge\n  roles:\n    generator: a\n",
+		"ensemble too few":     base + "review:\n  pipeline: ensemble\n  roles:\n    ensemble: [a]\n",
+		"ensemble undefined":   base + "review:\n  pipeline: ensemble\n  roles:\n    ensemble: [a, nope]\n",
+		"negative run budget":  base + "review:\n  pipeline: single\n  roles:\n    reviewer: a\n  max_run_tokens: -1\n",
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(writeConfig(t, content)); err == nil {
+				t.Fatal("want validation error, got nil")
+			}
+		})
+	}
+	// A valid ensemble of two.
+	if _, err := Load(writeConfig(t, base+"review:\n  pipeline: ensemble\n  roles:\n    ensemble: [a, b]\n")); err != nil {
+		t.Fatalf("valid ensemble rejected: %v", err)
 	}
 }
 
@@ -137,11 +218,38 @@ func TestEnvOverrides(t *testing.T) {
 	if cfg.Review.MaxInlineComments != 20 {
 		t.Errorf("env should override file: got %d", cfg.Review.MaxInlineComments)
 	}
-	if cfg.Review.MinConfidence != 0.5 || cfg.Provider.Model != "env-model" {
-		t.Errorf("env overrides not applied: %+v", cfg)
+	if cfg.Review.MinConfidence != 0.5 {
+		t.Errorf("SIEVE_MIN_CONFIDENCE not applied: %v", cfg.Review.MinConfidence)
+	}
+	// SIEVE_MODEL must reach the provider the review actually calls — the map
+	// entry for the active reviewer role — not just the legacy singular struct.
+	if got := cfg.Providers[cfg.Review.Roles.Reviewer].Model; got != "env-model" {
+		t.Errorf("SIEVE_MODEL did not reach the active provider: got %q via role %q", got, cfg.Review.Roles.Reviewer)
+	}
+	if cfg.Provider.Model != "env-model" {
+		t.Errorf("legacy Provider.Model should stay coherent: %q", cfg.Provider.Model)
 	}
 	if diff := cmp.Diff([]string{"a/**", "b/**"}, cfg.Paths.Exclude); diff != "" {
 		t.Errorf("SIEVE_EXCLUDE mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestEnvModelOverridesJudgeGenerator: SIEVE_MODEL overrides the primary active
+// role (the generator) in a multi-model judge config, reaching the review path.
+func TestEnvModelOverridesJudgeGenerator(t *testing.T) {
+	t.Setenv("SIEVE_MODEL", "env-model")
+	yaml := "review:\n  pipeline: judge\n  roles:\n    generator: gen\n    judge: jdg\n" +
+		"providers:\n  gen:\n    type: anthropic\n    model: file-gen\n    api_key_env: A\n" +
+		"  jdg:\n    type: anthropic\n    model: file-judge\n    api_key_env: B\n"
+	cfg, err := Load(writeConfig(t, yaml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Providers["gen"].Model != "env-model" {
+		t.Errorf("SIEVE_MODEL should override the generator model, got %q", cfg.Providers["gen"].Model)
+	}
+	if cfg.Providers["jdg"].Model != "file-judge" {
+		t.Errorf("SIEVE_MODEL must not touch the judge model, got %q", cfg.Providers["jdg"].Model)
 	}
 }
 
@@ -172,35 +280,35 @@ func TestAPIKeyFieldIsRejected(t *testing.T) {
 }
 
 func TestValidateForReview(t *testing.T) {
+	// Build a single-pipeline config whose reviewer provider is `p`.
+	with := func(p Provider) Config {
+		c := Default()
+		c.Providers = map[string]Provider{"r": p}
+		c.Review.Roles.Reviewer = "r"
+		return c
+	}
 	cases := map[string]struct {
-		mutate  func(*Config)
+		p       Provider
 		wantErr string
 	}{
-		"anthropic needs model":    {func(c *Config) { c.Provider.Model = "" }, "provider.model"},
-		"anthropic needs key env":  {func(c *Config) { c.Provider.Model = "m"; c.Provider.APIKeyEnv = "" }, "api_key_env"},
-		"openai-compat needs base": {func(c *Config) { c.Provider.Type = "openai-compat"; c.Provider.Model = "m" }, "base_url"},
-		"fake needs fixture":       {func(c *Config) { c.Provider.Type = "fake" }, "fixture"},
+		"anthropic needs model":    {Provider{Type: "anthropic", APIKeyEnv: "K"}, "model"},
+		"anthropic needs key env":  {Provider{Type: "anthropic", Model: "m"}, "api_key_env"},
+		"openai-compat needs base": {Provider{Type: "openai-compat", Model: "m", APIKeyEnv: "K"}, "base_url"},
+		"fake needs fixture":       {Provider{Type: "fake"}, "fixture"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			cfg := Default()
-			c.mutate(&cfg)
-			err := cfg.ValidateForReview()
+			err := with(c.p).ValidateForReview()
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 				t.Fatalf("want error containing %q, got %v", c.wantErr, err)
 			}
 		})
 	}
-	ok := Default()
-	ok.Provider.Model = "m"
-	if err := ok.ValidateForReview(); err != nil {
-		t.Fatalf("valid anthropic config rejected: %v", err)
+	if err := with(Provider{Type: "anthropic", Model: "m", APIKeyEnv: "K"}).ValidateForReview(); err != nil {
+		t.Fatalf("valid anthropic rejected: %v", err)
 	}
-	fake := Default()
-	fake.Provider.Type = "fake"
-	fake.Provider.Fixture = "x.json"
-	if err := fake.ValidateForReview(); err != nil {
-		t.Fatalf("valid fake config rejected: %v", err)
+	if err := with(Provider{Type: "fake", Fixture: "x.json"}).ValidateForReview(); err != nil {
+		t.Fatalf("valid fake rejected: %v", err)
 	}
 }
 

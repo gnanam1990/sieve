@@ -3,6 +3,7 @@ package review
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -110,6 +111,41 @@ func TestRunEndToEndFakeGolden(t *testing.T) {
 	}
 }
 
+// TestReviewInjectsLearnings: a repository learnings file at the PR head is
+// fetched and folded into the generation prompt (learningsCount > 0).
+func TestReviewInjectsLearnings(t *testing.T) {
+	diffData, err := os.ReadFile("../../testdata/diffs/multi_file_multi_hunk.diff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	learnBody := "<!-- sieve:learnings -->\n\n- Do not flag error equality comparisons *(auto — 2 signals, 2026-05)*\n"
+	b64 := base64.StdEncoding.EncodeToString([]byte(learnBody))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/files"):
+			fmt.Fprint(w, `[{"filename":"alpha.txt","status":"modified"},{"filename":"beta.txt","status":"modified"}]`)
+		case strings.Contains(r.URL.Path, "/contents/.sieve/learnings.md"):
+			fmt.Fprintf(w, `{"encoding":"base64","content":%q}`, b64)
+		case strings.Contains(r.URL.Path, "/contents/"):
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"message":"Not Found"}`)
+		case strings.Contains(r.Header.Get("Accept"), "diff"):
+			w.Write(diffData) //nolint:errcheck
+		default:
+			fmt.Fprint(w, `{"number":7,"title":"t","body":"b","state":"open","draft":false,
+				"user":{"login":"alice"},"base":{"ref":"main","sha":"base777"},"head":{"ref":"feat","sha":"head888"}}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	rc, err := Run(context.Background(), fakeProviderOptions(t, srv, "testdata/fake_findings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc.learningsCount == 0 {
+		t.Fatalf("learnings should have been injected, got count=%d", rc.learningsCount)
+	}
+}
+
 // TestRunDraftSkipsLLM: a draft PR with review_drafts unset exits with the
 // stage-1 context and zero provider traffic.
 func TestRunDraftSkipsLLM(t *testing.T) {
@@ -160,10 +196,9 @@ func (s *scripted) Complete(_ context.Context, _ provider.Request) (provider.Res
 	return provider.Response{Text: s.texts[i], Usage: provider.Usage{InputTokens: 10, OutputTokens: 5}}, nil
 }
 
-func testBatchConfig() config.Config {
-	cfg := config.Default()
-	cfg.Provider.Model = "m"
-	return cfg
+// testProvider is the resolved provider config a runBatch call now takes.
+func testProvider() config.Provider {
+	return config.Provider{Model: "m", MaxTokens: 4096, TimeoutSeconds: 120}
 }
 
 func TestRunBatchCorrectiveRetrySucceeds(t *testing.T) {
@@ -171,7 +206,7 @@ func TestRunBatchCorrectiveRetrySucceeds(t *testing.T) {
 		"Sure! Here are my findings in prose form.",
 		`{"findings":[]}`,
 	}}
-	r := runBatch(context.Background(), p, "sys", prompt.Batch{User: "u"}, testBatchConfig(), time.Minute)
+	r := runBatch(context.Background(), p, "sys", prompt.Batch{User: "u"}, testProvider(), time.Minute)
 	if r.err != nil {
 		t.Fatalf("corrective retry should succeed: %v", r.err)
 	}
@@ -186,7 +221,7 @@ func TestRunBatchCorrectiveRetrySucceeds(t *testing.T) {
 func TestRunBatchCorrectiveRetryAppendsNote(t *testing.T) {
 	var secondUser string
 	p := &recordingProvider{onSecond: func(req provider.Request) { secondUser = req.User }}
-	runBatch(context.Background(), p, "sys", prompt.Batch{User: "original"}, testBatchConfig(), time.Minute)
+	runBatch(context.Background(), p, "sys", prompt.Batch{User: "original"}, testProvider(), time.Minute)
 	if !strings.HasPrefix(secondUser, "original") || !strings.Contains(secondUser, "not valid JSON") {
 		t.Fatalf("corrective note must be appended to the original prompt, got %q", secondUser)
 	}
@@ -209,8 +244,60 @@ func (r *recordingProvider) Complete(_ context.Context, req provider.Request) (p
 
 func TestRunBatchProviderError(t *testing.T) {
 	p := &scripted{texts: []string{""}, errs: []error{errors.New("boom")}}
-	r := runBatch(context.Background(), p, "sys", prompt.Batch{User: "u"}, testBatchConfig(), time.Minute)
+	r := runBatch(context.Background(), p, "sys", prompt.Batch{User: "u"}, testProvider(), time.Minute)
 	if r.err == nil || r.requests != 1 {
 		t.Fatalf("provider error must fail the batch without corrective retry: err=%v requests=%d", r.err, r.requests)
+	}
+}
+
+func TestNewProviderFrom(t *testing.T) {
+	opts := Options{Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	t.Setenv("SIEVE_TEST_KEY", "sk-test")
+	cases := []struct {
+		name    string
+		p       config.Provider
+		wantErr bool
+	}{
+		{"anthropic with key", config.Provider{Type: "anthropic", Model: "m", APIKeyEnv: "SIEVE_TEST_KEY"}, false},
+		{"openai-compat with key", config.Provider{Type: "openai-compat", Model: "m", APIKeyEnv: "SIEVE_TEST_KEY", BaseURL: "https://api.example.com/v1"}, false},
+		{"fake", config.Provider{Type: "fake", Fixture: "x.json"}, false},
+		{"missing key", config.Provider{Type: "anthropic", Model: "m", APIKeyEnv: "SIEVE_UNSET_KEY_XYZ"}, true},
+		{"unknown type", config.Provider{Type: "bogus"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p, err := newProviderFrom(c.p, opts, func() {})
+			if (err != nil) != c.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, c.wantErr)
+			}
+			if !c.wantErr && p == nil {
+				t.Fatal("expected a provider")
+			}
+		})
+	}
+}
+
+func TestPrimaryProvider(t *testing.T) {
+	single := config.Config{Providers: map[string]config.Provider{"default": {Model: "m"}}}
+	single.Review.Pipeline = "single"
+	single.Review.Roles.Reviewer = "default"
+	if rp, err := primaryProvider(single); err != nil || rp.Model != "m" {
+		t.Fatalf("single: rp=%+v err=%v", rp, err)
+	}
+
+	// Judge's primary is the first active role (the generator).
+	judge := config.Config{Providers: map[string]config.Provider{"g": {Model: "gm"}, "j": {Model: "jm"}}}
+	judge.Review.Pipeline = "judge"
+	judge.Review.Roles.Generator = "g"
+	judge.Review.Roles.Judge = "j"
+	if rp, err := primaryProvider(judge); err != nil || rp.Model != "gm" {
+		t.Fatalf("judge: rp=%+v err=%v", rp, err)
+	}
+
+	broken := config.Config{Providers: map[string]config.Provider{}}
+	broken.Review.Pipeline = "single"
+	broken.Review.Roles.Reviewer = "missing"
+	if _, err := primaryProvider(broken); err == nil {
+		t.Fatal("undefined role must error")
 	}
 }
