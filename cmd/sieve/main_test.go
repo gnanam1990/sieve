@@ -32,6 +32,13 @@ func readFixtureDiff(t *testing.T) ([]byte, error) {
 	return os.ReadFile("../../testdata/diffs/multi_file_multi_hunk.diff")
 }
 
+func writeFile(path, content string) error { return os.WriteFile(path, []byte(content), 0o600) }
+
+func readFile(path string) (string, error) {
+	b, err := os.ReadFile(path) //nolint:gosec // test-controlled path
+	return string(b), err
+}
+
 func TestRunNoArgs(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run(nil, &out, &errOut); code != exitError {
@@ -187,6 +194,114 @@ func TestPostPartialFailureExitsTwo(t *testing.T) {
 		"--api-url", srv.URL, "--config", fixture}, &out, &errOut)
 	if code != exitPartial {
 		t.Fatalf("exit %d, want %d (partial); stderr:\n%s", code, exitPartial, errOut.String())
+	}
+}
+
+// TestForkPRSkipsCleanly is R4: a fork PR under Actions exits 0 with a notice
+// and a step-summary entry, never reaching a provider call.
+func TestForkPRSkipsCleanly(t *testing.T) {
+	dir := t.TempDir()
+	eventPath := dir + "/event.json"
+	if err := writeFile(eventPath, `{
+		"pull_request": {"number": 5, "head": {"repo": {"full_name": "forker/app"}}, "base": {"repo": {"full_name": "acme/app"}}},
+		"repository": {"full_name": "acme/app"}
+	}`); err != nil {
+		t.Fatal(err)
+	}
+	summaryPath := dir + "/summary.md"
+	if err := writeFile(summaryPath, ""); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GITHUB_ACTIONS", "true")
+	t.Setenv("GITHUB_EVENT_PATH", eventPath)
+	t.Setenv("GITHUB_STEP_SUMMARY", summaryPath)
+
+	var out, errOut bytes.Buffer
+	// No --api-url and no server: if it did not skip, it would try to reach
+	// GitHub and fail — so exit 0 proves the skip happened first.
+	code := run([]string{"review", "--repo", "acme/app", "--pr", "5", "--token", "x", "--post"}, &out, &errOut)
+	if code != exitOK {
+		t.Fatalf("fork PR must exit 0, got %d; stderr:\n%s", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "fork PR") {
+		t.Fatalf("expected fork notice on stderr:\n%s", errOut.String())
+	}
+	summary, _ := readFile(summaryPath)
+	if !strings.Contains(summary, "fork PR") || !strings.Contains(summary, "skipped") {
+		t.Fatalf("step summary missing fork notice:\n%s", summary)
+	}
+}
+
+// TestForkSkipNotAppliedToDryRun: a --dry-run needs no secrets, so it is not
+// short-circuited by the fork guard.
+func TestForkSkipNotAppliedToDryRun(t *testing.T) {
+	dir := t.TempDir()
+	eventPath := dir + "/event.json"
+	_ = writeFile(eventPath, `{"pull_request":{"number":5,"head":{"repo":{"full_name":"forker/app"}}},"repository":{"full_name":"acme/app"}}`)
+	t.Setenv("GITHUB_ACTIONS", "true")
+	t.Setenv("GITHUB_EVENT_PATH", eventPath)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/files"):
+			fmt.Fprint(w, `[{"filename":"main.go","status":"modified"}]`)
+		case strings.Contains(r.Header.Get("Accept"), "diff"):
+			fmt.Fprint(w, "diff --git a/main.go b/main.go\n--- a/main.go\n+++ b/main.go\n@@ -1 +1 @@\n-old\n+new\n")
+		default:
+			fmt.Fprint(w, `{"number":5,"title":"T","state":"open","user":{"login":"a"},"base":{"sha":"b"},"head":{"sha":"h"}}`)
+		}
+	}))
+	defer srv.Close()
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"review", "--repo", "acme/app", "--pr", "5", "--token", "x",
+		"--dry-run", "--api-url", srv.URL, "--config", dir + "/.sieve.yml"}, &out, &errOut)
+	if code != exitOK {
+		t.Fatalf("dry-run on a fork should still run, got %d; stderr:\n%s", code, errOut.String())
+	}
+	if strings.Contains(errOut.String(), "fork PR") {
+		t.Fatal("dry-run must not trigger the fork skip")
+	}
+}
+
+// TestMissingKeyWritesStepSummary is R4: a fatal error under Actions writes a
+// fix hint to the step summary, and the error names the env var, not its value.
+func TestMissingKeyWritesStepSummary(t *testing.T) {
+	dir := t.TempDir()
+	summaryPath := dir + "/summary.md"
+	_ = writeFile(summaryPath, "")
+	t.Setenv("GITHUB_ACTIONS", "true")
+	t.Setenv("GITHUB_STEP_SUMMARY", summaryPath)
+	t.Setenv("GITHUB_EVENT_PATH", "")
+
+	// Config demands a real provider whose key env var is unset -> fatal.
+	cfgPath := dir + "/.sieve.yml"
+	_ = writeFile(cfgPath, "provider:\n  type: anthropic\n  model: m\n  api_key_env: DEFINITELY_UNSET_KEY_VAR\n")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/files"):
+			fmt.Fprint(w, `[]`)
+		case strings.Contains(r.Header.Get("Accept"), "diff"):
+			fmt.Fprint(w, "")
+		default:
+			fmt.Fprint(w, `{"number":1,"title":"T","state":"open","user":{"login":"a"},"base":{"sha":"b"},"head":{"sha":"h"}}`)
+		}
+	}))
+	defer srv.Close()
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"review", "--repo", "a/b", "--pr", "1", "--token", "x", "--post",
+		"--api-url", srv.URL, "--config", cfgPath}, &out, &errOut)
+	if code != exitError {
+		t.Fatalf("missing key must exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut.String(), "DEFINITELY_UNSET_KEY_VAR") {
+		t.Fatalf("error must name the env var: %s", errOut.String())
+	}
+	summary, _ := readFile(summaryPath)
+	if !strings.Contains(summary, "sieve failed") || !strings.Contains(summary, "api_key_env_name") {
+		t.Fatalf("step summary missing fix hint:\n%s", summary)
 	}
 }
 

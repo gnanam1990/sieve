@@ -1,7 +1,11 @@
 BINARY  := sieve
 MODULE  := github.com/gnanam1990/sieve
 VERSION ?= dev
-LDFLAGS := -X $(MODULE)/internal/version.Version=$(VERSION)
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS := -X $(MODULE)/internal/version.Version=$(VERSION) \
+           -X $(MODULE)/internal/version.Commit=$(COMMIT) \
+           -X $(MODULE)/internal/version.Date=$(DATE)
 
 # coverage gates
 COVER_DIFF_MIN        := 90

@@ -334,24 +334,83 @@ func RepoFromEnv() string {
 	return os.Getenv("GITHUB_REPOSITORY")
 }
 
-// PRNumberFromEnv reads the Actions event payload at GITHUB_EVENT_PATH and
-// returns pull_request.number, or 0 if unavailable.
-func PRNumberFromEnv() int {
-	path := os.Getenv("GITHUB_EVENT_PATH")
+// Event is the subset of the Actions pull_request event payload sieve reads:
+// the PR number and the head/base repo full names used for fork detection.
+type Event struct {
+	Number   int
+	HeadRepo string // pull_request.head.repo.full_name ("" if the fork was deleted)
+	BaseRepo string // repository.full_name, i.e. the repo the workflow runs in
+	Found    bool   // a pull_request event was present and parsed
+}
+
+// IsFork reports whether the PR originates from a fork — the case where the
+// workflow's GITHUB_TOKEN is read-only and repository secrets (the model API
+// key) are withheld. A missing head repo (deleted fork) is treated as a fork,
+// since secrets are equally unavailable. Non-events are never forks.
+func (e Event) IsFork() bool {
+	if !e.Found {
+		return false
+	}
+	if e.HeadRepo == "" {
+		return true
+	}
+	return e.BaseRepo != "" && e.HeadRepo != e.BaseRepo
+}
+
+// EventFromEnv parses the Actions event payload named by GITHUB_EVENT_PATH.
+func EventFromEnv() Event { return EventFromPath(os.Getenv("GITHUB_EVENT_PATH")) }
+
+// EventFromPath parses a pull_request event payload file. A missing or
+// unparseable file yields a zero Event (Found == false).
+func EventFromPath(path string) Event {
 	if path == "" {
-		return 0
+		return Event{}
 	}
 	data, err := os.ReadFile(path) //nolint:gosec // GITHUB_EVENT_PATH is the Actions runtime contract
 	if err != nil {
-		return 0
+		return Event{}
 	}
-	var event struct {
-		PullRequest struct {
+	// pull_request is a pointer so its *presence* (not merely a populated
+	// repository block, which every event has) marks this as a PR event. A
+	// push/workflow_dispatch/schedule payload has no pull_request -> not found,
+	// never a fork.
+	var raw struct {
+		PullRequest *struct {
 			Number int `json:"number"`
+			Head   struct {
+				Repo *struct {
+					FullName string `json:"full_name"`
+				} `json:"repo"`
+			} `json:"head"`
+			Base struct {
+				Repo struct {
+					FullName string `json:"full_name"`
+				} `json:"repo"`
+			} `json:"base"`
 		} `json:"pull_request"`
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
 	}
-	if json.Unmarshal(data, &event) != nil {
-		return 0
+	if json.Unmarshal(data, &raw) != nil || raw.PullRequest == nil {
+		return Event{}
 	}
-	return event.PullRequest.Number
+	base := raw.Repository.FullName
+	if base == "" {
+		base = raw.PullRequest.Base.Repo.FullName
+	}
+	head := ""
+	if raw.PullRequest.Head.Repo != nil {
+		head = raw.PullRequest.Head.Repo.FullName
+	}
+	return Event{
+		Number:   raw.PullRequest.Number,
+		HeadRepo: head,
+		BaseRepo: base,
+		Found:    true,
+	}
 }
+
+// PRNumberFromEnv reads the Actions event payload and returns
+// pull_request.number, or 0 if unavailable.
+func PRNumberFromEnv() int { return EventFromEnv().Number }

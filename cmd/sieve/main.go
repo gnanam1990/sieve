@@ -35,7 +35,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "review":
 		return runReview(args[1:], stdout, stderr)
 	case "version":
-		fmt.Fprintln(stdout, "sieve "+version.Version)
+		fmt.Fprintln(stdout, version.Info())
 		return exitOK
 	case "help", "-h", "--help":
 		usage(stdout)
@@ -75,6 +75,17 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 	}
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
 
+	// R4 fork safety: inside a GitHub Action, a fork PR runs with a read-only
+	// token and no secrets (the model key is withheld). Detect it before any
+	// provider call and skip cleanly rather than failing cryptically. A
+	// --dry-run needs no secrets, so it is allowed to proceed.
+	if !*dryRun && os.Getenv("GITHUB_ACTIONS") == "true" {
+		if ev := gh.EventFromEnv(); ev.IsFork() {
+			forkSkipNotice(stderr, ev)
+			return exitOK
+		}
+	}
+
 	if *repo == "" {
 		*repo = gh.RepoFromEnv()
 	}
@@ -101,6 +112,14 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, "error:", err)
+		// R4: in Actions, surface a fix hint in the step summary. The error text
+		// names the missing env var (never its value) — see review.newProvider.
+		if os.Getenv("GITHUB_ACTIONS") == "true" {
+			writeStepSummary("### sieve failed\n\n```\n" + err.Error() + "\n```\n\n" +
+				"If this is a missing API key, set the secret named by the action's " +
+				"`api_key_env_name` input (default `SIEVE_API_KEY`) in your workflow `env:`. " +
+				"See [docs/forks.md](docs/forks.md).\n")
+		}
 		return exitError
 	}
 	if err := rc.WriteJSON(stdout); err != nil {
@@ -114,6 +133,35 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 		return exitPartial
 	}
 	return exitOK
+}
+
+// forkSkipNotice reports a fork-PR skip to stderr and the Actions step summary
+// and is the reason the run exits 0 rather than failing.
+func forkSkipNotice(stderr io.Writer, ev gh.Event) {
+	head := ev.HeadRepo
+	if head == "" {
+		head = "(deleted fork)"
+	}
+	msg := fmt.Sprintf("fork PR (%s → %s): secrets are unavailable to this workflow; "+
+		"skipping review. Same-repo PRs are the supported surface — see docs/forks.md.",
+		head, ev.BaseRepo)
+	fmt.Fprintln(stderr, "notice:", msg)
+	writeStepSummary("### sieve skipped a fork PR\n\n" + msg + "\n")
+}
+
+// writeStepSummary appends markdown to the GitHub Actions step summary when
+// running under Actions; a no-op otherwise.
+func writeStepSummary(md string) {
+	path := os.Getenv("GITHUB_STEP_SUMMARY")
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644) //nolint:gosec // Actions-provided path
+	if err != nil {
+		return
+	}
+	defer f.Close() //nolint:errcheck // best-effort summary
+	_, _ = io.WriteString(f, md)
 }
 
 func usage(w io.Writer) {
