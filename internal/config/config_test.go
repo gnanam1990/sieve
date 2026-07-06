@@ -149,6 +149,33 @@ func TestLoadPartialFileKeepsDefaults(t *testing.T) {
 	}
 }
 
+func TestContextDepthDefaultsAndOverride(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "nope.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Review.ContextDepth != "symbols" {
+		t.Errorf("default context_depth = %q, want symbols", cfg.Review.ContextDepth)
+	}
+	if cfg.Review.ContextMaxFiles != 20 {
+		t.Errorf("default context_max_files = %d, want 20", cfg.Review.ContextMaxFiles)
+	}
+	if cfg.Review.ContextMaxTokens != 8000 {
+		t.Errorf("default context_max_tokens = %d, want 8000", cfg.Review.ContextMaxTokens)
+	}
+
+	cfg, err = Load(writeConfig(t, "review:\n  context_depth: blast\n  context_max_files: 50\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Review.ContextDepth != "blast" {
+		t.Errorf("context_depth override = %q, want blast", cfg.Review.ContextDepth)
+	}
+	if cfg.Review.ContextMaxFiles != 50 {
+		t.Errorf("context_max_files override = %d, want 50", cfg.Review.ContextMaxFiles)
+	}
+}
+
 func TestLoadUnknownKeyIsHardError(t *testing.T) {
 	_, err := Load(writeConfig(t, "review:\n  max_comment: 5\n"))
 	if err == nil {
@@ -196,6 +223,9 @@ func TestLoadValidation(t *testing.T) {
 		"timeout too low":              "provider:\n  timeout_seconds: 9\n",
 		"timeout too high":             "provider:\n  timeout_seconds: 601\n",
 		"bad provider type":            "provider:\n  type: bedrock\n",
+		"bad context depth":            "review:\n  context_depth: full\n",
+		"negative context max files":   "review:\n  context_max_files: -1\n",
+		"negative context max tokens":  "review:\n  context_max_tokens: -1\n",
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {

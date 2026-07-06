@@ -144,6 +144,11 @@ type Options struct {
 	Now        func() string // metadata timestamp source; defaults to time.Now (UTC RFC3339)
 	Log        *slog.Logger
 
+	// RepoPath is the local checkout root used for Stage 8 repo-map/blast context
+	// depth. Empty means no local checkout is available (e.g. daemon mode) and
+	// those depths fall back to symbols-only context from the changed files.
+	RepoPath string
+
 	// Daemon-mode injection (stage 7). When set, TokenSource replaces the
 	// StaticTokenSource built from Token — App installation auth drops in exactly
 	// where a static token would. When set, Config replaces loading ConfigPath —

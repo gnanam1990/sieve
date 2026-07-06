@@ -714,3 +714,65 @@ their 90% coverage floors.
 Deferred to the batch at the top of this file (`stage-07 live`: real GitHub App
 + tunnel, coalescing-in-logs, kill-9 replay, `docs/self-hosting.md` walked
 start-to-finish). Not run offline.
+
+---
+
+# Stage 8 — Context Depth (symbols, repo map, blast radius)
+
+## Decisions / smallest-reasonable-choice notes
+
+- **Wazero tree-sitter, cgo-free.** `github.com/malivvan/tree-sitter` runs the
+  bundled C/C++ grammars inside `github.com/tetratelabs/wazero`. Pinned wazero
+  to `v1.8.2` so Go stays at `1.23.4` (wazero `v1.12.0` wanted Go 1.25). The
+  grammar runtime is a thin wrapper (`internal/grammar`) with a per-language
+  parser pool because the underlying WASM module is not reentrant across
+  concurrent parses.
+- **Pluggable extractors in `internal/symbols`.** Go files use stdlib
+  `go/parser` + `go/ast`; C/C++ use the grammar-backed extractor; everything else
+  falls back to regex heuristics. A registry (`Default`, `DefaultWithGrammar`)
+  routes by extension so the same code serves `symbols`, `repomap`, and `blast`
+  without the caller touching the parser runtime.
+- **Three context depths controlled by config.** `review.context_depth`
+  (`symbols` | `repomap` | `blast`) plus `context_max_files`,
+  `context_max_tokens`, and `context_langs`. Defaults are `symbols`, 20 files,
+  8000 tokens, all languages. The CLI passes the cwd as `RepoPath`; daemon mode
+  leaves it empty so `repomap`/`blast` gracefully fall back to symbols-only
+  context (no local checkout in the current server design).
+- **Repo map is a symbol/import index, not a full call graph.** `repomap.Build`
+  walks the repo respecting include/exclude globs and the configured caps, then
+  indexes symbols and imports. `blast.Compute` uses only import/symbol edges:
+  direct files import symbols defined in the change or define symbols the change
+  imports; indirect files import from direct files. This is intentionally coarse
+  and fast — good enough to surface cross-file impact without full type
+  resolution.
+- **Prompt integration is additive.** `prompt.Input` gained `ExtraContext`; the
+  existing templates and batching are unchanged. If `ExtraContext` is empty, the
+  rendered prompt is identical to Stage 7, so golden tests stay stable.
+
+## Offline gates
+
+`go vet ./...` clean; full suite green `-race -shuffle=on`; overall coverage
+86.7% (≥85). New Stage 8 packages all cleared their 90% floors:
+`internal/grammar` 90.6%, `internal/symbols` 90.5%, `internal/repomap` 92.2%,
+`internal/blast` 92.0%. Config schema changes validated for default values,
+repo override, and the new `context_depth` / `context_max_files` /
+`context_max_tokens` validation rules.
+
+## Adversarial review
+
+No dedicated multi-agent pass was run for Stage 8 in this offline build; the
+usual self-review surfaced and fixed:
+
+- A queue-replay defect (fixed in Stage 7 before this branch diverged).
+- A wazero version drift that would have pulled Go 1.25 — pinned.
+- Grammar coverage gaps from unreachable WASM error branches; trimmed the public
+  wrapper to the surface actually used (`Kind`, `StartByte`, `Text`) and added
+  regression tests for pool cap, release lazy-channel creation, and truncated
+  source text.
+
+## Live validation
+
+Deferred to the batch at the top of this file. Stage 8-specific live checks:
+run `context_depth: symbols`, `repomap`, and `blast` against the sandbox repo
+and verify the prompt footer shows the expected context section without
+increasing token usage more than the configured caps.

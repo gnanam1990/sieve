@@ -242,6 +242,11 @@ func buildPromptInput(ctx context.Context, rc *ReviewContext, client *gh.Client,
 		}
 		in.Files = append(in.Files, f)
 	}
+	if extra, err := buildExtraContext(ctx, cfg, opts.RepoPath, in.Files); err == nil && extra != "" {
+		in.ExtraContext = extra
+	} else if err != nil {
+		opts.Log.Debug("context assembly failed", "depth", cfg.Review.ContextDepth, "err", err)
+	}
 	return in, sent
 }
 

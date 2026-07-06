@@ -110,9 +110,10 @@ type File struct {
 
 // Input is everything the user prompts are built from.
 type Input struct {
-	Title string
-	Body  string
-	Files []File
+	Title         string
+	Body          string
+	Files         []File
+	ExtraContext  string // optional repository-context section appended to the header
 }
 
 // Batch is one provider request's worth of files.
@@ -183,6 +184,9 @@ func renderHeader(in Input) string {
 	sb.WriteString("# Pull request\n\nTitle: " + in.Title + "\n")
 	if strings.TrimSpace(body) != "" {
 		sb.WriteString("\nDescription:\n" + body + "\n")
+	}
+	if strings.TrimSpace(in.ExtraContext) != "" {
+		sb.WriteString("\n# Repository context\n\n" + strings.TrimSpace(in.ExtraContext) + "\n")
 	}
 	sb.WriteString("\n# Changed files\n")
 	return sb.String()
