@@ -40,7 +40,9 @@ type Finding struct {
 	findings.Finding
 	Fingerprint string `json:"Fingerprint"`
 	Tier        Tier   `json:"Tier"`
-	Repeated    bool   `json:"Repeated"` // fingerprint present in the prior run's metadata
+	Repeated    bool   `json:"Repeated"`      // fingerprint present in the prior run (carried or re-emerged); never re-posted
+	Cid         int64  `json:"Cid,omitempty"` // inline comment ID when Repeated (existing thread)
+	Carried     bool   `json:"Carried,omitempty"` // carried forward from meta without re-review (delta)
 }
 
 // Stats accounts for every routing decision.
@@ -62,13 +64,18 @@ type Stats struct {
 type GateResult struct {
 	Inline   []Finding
 	Notes    []Finding
-	Resolved []PriorFinding
+	Resolved []CompactFinding
 	Stats    Stats
 }
 
-// Route applies the full gate pipeline. prior is the fingerprint list decoded
-// from the previous walkthrough's metadata (nil on the first run).
-func Route(fs []findings.Finding, idx *fingerprint.ContentIndex, prior []PriorFinding, cfg config.Review) GateResult {
+// Route applies the full gate pipeline to freshly-reviewed findings. prior is
+// the compact active-finding list decoded from the previous walkthrough's v2
+// metadata (nil on the first run); a fresh finding whose fingerprint matches a
+// prior one is marked Repeated and inherits its inline comment ID (cid), and a
+// prior finding absent this run is Resolved. For a delta re-review, prior must
+// be restricted to findings on the re-reviewed paths — untouched-file findings
+// are carried forward separately by internal/incremental.
+func Route(fs []findings.Finding, idx *fingerprint.ContentIndex, prior []CompactFinding, cfg config.Review) GateResult {
 	var res GateResult
 	res.Stats.InputFindings = len(fs)
 
@@ -119,17 +126,18 @@ func Route(fs []findings.Finding, idx *fingerprint.ContentIndex, prior []PriorFi
 	}
 	sortNotes(notes)
 
-	// 5. Cross-run dedupe: mark repeats, compute resolved.
-	priorByFp := make(map[string]PriorFinding, len(prior))
+	// 5. Cross-run dedupe: mark repeats (inheriting the prior cid), compute
+	// resolved (prior findings absent from this run's fresh set).
+	priorByFp := make(map[string]CompactFinding, len(prior))
 	for _, p := range prior {
-		priorByFp[p.Fingerprint] = p
+		priorByFp[p.Fp] = p
 	}
 	currentFps := make(map[string]bool, len(inline)+len(notes))
 	markRepeated(inline, priorByFp, currentFps, &res.Stats.RepeatedInline)
 	markRepeated(notes, priorByFp, currentFps, &res.Stats.RepeatedNotes)
 
 	for _, p := range prior {
-		if !currentFps[p.Fingerprint] {
+		if !currentFps[p.Fp] {
 			res.Resolved = append(res.Resolved, p)
 		}
 	}
@@ -185,14 +193,47 @@ func span(f findings.Finding) (lo, hi int) {
 	return f.Line, hi
 }
 
-func markRepeated(fs []Finding, prior map[string]PriorFinding, current map[string]bool, counter *int) {
+func markRepeated(fs []Finding, prior map[string]CompactFinding, current map[string]bool, counter *int) {
 	for i := range fs {
 		current[fs[i].Fingerprint] = true
-		if _, ok := prior[fs[i].Fingerprint]; ok {
+		if p, ok := prior[fs[i].Fingerprint]; ok {
 			fs[i].Repeated = true
+			fs[i].Cid = p.Cid
 			*counter++
 		}
 	}
+}
+
+// fromCompact reconstructs a carried gate.Finding from a v2 metadata record.
+// It is Repeated (never re-posted) and keeps its inline comment ID. Body,
+// EndLine tail, and Suggestion are not persisted in the compact record, so a
+// carried notes finding renders as its title only — acceptable for a
+// carried-forward entry; a full re-review restores the body.
+func fromCompact(cf CompactFinding) Finding {
+	return Finding{
+		Finding: findings.Finding{
+			Path:       cf.Path,
+			Line:       cf.Line,
+			EndLine:    cf.EndLine,
+			Side:       ExpandSide(cf.Side),
+			Severity:   findings.Severity(cf.Severity),
+			Confidence: cf.Conf,
+			Category:   cf.Category,
+			Title:      cf.Title,
+		},
+		Fingerprint: cf.Fp,
+		Tier:        tierFromString(cf.Tier),
+		Repeated:    true,
+		Cid:         cf.Cid,
+		Carried:     true,
+	}
+}
+
+func tierFromString(s string) Tier {
+	if s == "notes" {
+		return TierNotes
+	}
+	return TierInline
 }
 
 func sortInline(fs []Finding) {
@@ -226,7 +267,7 @@ func sortNotes(fs []Finding) {
 	})
 }
 
-func sortResolved(ps []PriorFinding) {
+func sortResolved(ps []CompactFinding) {
 	sort.SliceStable(ps, func(i, j int) bool {
 		if ra, rb := findings.Rank(findings.Severity(ps[i].Severity)), findings.Rank(findings.Severity(ps[j].Severity)); ra != rb {
 			return ra < rb
@@ -234,6 +275,61 @@ func sortResolved(ps []PriorFinding) {
 		if ps[i].Path != ps[j].Path {
 			return ps[i].Path < ps[j].Path
 		}
-		return ps[i].Fingerprint < ps[j].Fingerprint
+		return ps[i].Fp < ps[j].Fp
 	})
+}
+
+// ActiveCompact flattens a routed result's active findings (inline then notes)
+// into compact records for the v2 metadata, stamping each with its comment ID
+// (0 when not posted inline). cids maps a fingerprint to its inline comment ID.
+func (r GateResult) ActiveCompact(cids map[string]int64) []CompactFinding {
+	out := make([]CompactFinding, 0, len(r.Inline)+len(r.Notes))
+	add := func(fs []Finding) {
+		for _, f := range fs {
+			cid := f.Cid
+			if c, ok := cids[f.Fingerprint]; ok && c != 0 {
+				cid = c
+			}
+			out = append(out, compactOf(f, cid))
+		}
+	}
+	add(r.Inline)
+	add(r.Notes)
+	return out
+}
+
+// AddCarried merges carried-forward findings (delta re-review) into the result,
+// re-sorting each tier. Carried findings are Repeated (never re-posted) and do
+// not count against max_inline_comments — the cap already applied to the fresh
+// inline set in Route.
+func (r *GateResult) AddCarried(carried []CompactFinding) {
+	for _, cf := range carried {
+		f := fromCompact(cf)
+		if f.Tier == TierInline {
+			r.Inline = append(r.Inline, f)
+		} else {
+			r.Notes = append(r.Notes, f)
+		}
+	}
+	sortInline(r.Inline)
+	sortNotes(r.Notes)
+	r.Stats.InlineCount = len(r.Inline)
+	r.Stats.NotesCount = len(r.Notes)
+}
+
+// AddResolved appends resolved records (e.g. anchor-gone detections) and
+// re-sorts, deduping by fingerprint.
+func (r *GateResult) AddResolved(more []CompactFinding) {
+	seen := make(map[string]bool, len(r.Resolved))
+	for _, x := range r.Resolved {
+		seen[x.Fp] = true
+	}
+	for _, x := range more {
+		if !seen[x.Fp] {
+			seen[x.Fp] = true
+			r.Resolved = append(r.Resolved, x)
+		}
+	}
+	sortResolved(r.Resolved)
+	r.Stats.ResolvedCount = len(r.Resolved)
 }

@@ -26,7 +26,8 @@ import (
 func gateAndPost(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg config.Config, opts Options, kept []diff.FileDiff) error {
 	idx := fingerprint.NewContentIndex(kept)
 
-	var prior []gate.PriorFinding
+	var prior []gate.CompactFinding
+	var priorResolved []string
 	var poster *post.Poster
 	var loc post.Locator
 
@@ -39,7 +40,8 @@ func gateAndPost(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg 
 			return fmt.Errorf("locate existing walkthrough: %w", err)
 		}
 		if loc.HasMeta {
-			prior = loc.Meta.Fps
+			prior = loc.Meta.PriorForRoute()
+			priorResolved = loc.Meta.Resolved
 		}
 	}
 
@@ -50,7 +52,8 @@ func gateAndPost(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg 
 		return nil
 	}
 
-	meta := gate.BuildMeta(rc.HeadSHA, opts.now(), res)
+	newlyResolved := fpsOf(res.Resolved)
+	meta := gate.BuildMeta(rc.HeadSHA, opts.now(), res.ActiveCompact(nil), priorResolved, newlyResolved)
 	walkthrough := render.Walkthrough(render.WalkthroughInput{
 		Result:        res,
 		Meta:          meta,
@@ -79,6 +82,15 @@ func gateAndPost(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg 
 	}
 	rc.Stats.InlinePostFailed = failed
 	return nil
+}
+
+// fpsOf extracts the fingerprints of a resolved-finding slice.
+func fpsOf(cfs []gate.CompactFinding) []string {
+	out := make([]string, 0, len(cfs))
+	for _, c := range cfs {
+		out = append(out, c.Fp)
+	}
+	return out
 }
 
 // skippedFiles collects the skipped-file rows for the walkthrough.

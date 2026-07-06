@@ -19,29 +19,40 @@ import (
 // instead of posting a duplicate.
 const WalkthroughMarker = "<!-- sieve:walkthrough -->"
 
-const metaPrefix = "<!-- sieve:meta v1 "
+// metaLocate is the stable, version-agnostic locator for the metadata line.
+// The actual schema version lives inside the JSON (Meta.Version); the marker
+// carries a display version (`v1`/`v2`) after this prefix, so a v2 sieve still
+// finds and reads a v1 walkthrough and vice-versa.
+const metaLocate = "<!-- sieve:meta "
 const metaSuffix = " -->"
 
-// MetaComment renders the hidden, base64-encoded metadata line.
+// MetaComment renders the hidden, base64-encoded metadata line, tagging it with
+// the schema version for readability.
 func MetaComment(m gate.Meta) string {
-	return metaPrefix + gate.EncodeMeta(m) + metaSuffix
+	return fmt.Sprintf("%sv%d %s%s", metaLocate, m.Version, gate.EncodeMeta(m), metaSuffix)
 }
 
-// ExtractMeta pulls the metadata block out of an existing walkthrough body.
-// The bool is false when no metadata line is present (e.g. a legacy or
-// hand-edited comment); a present-but-corrupt block returns an error so the
-// caller can warn rather than silently lose cross-run dedupe.
+// ExtractMeta pulls the metadata block out of an existing walkthrough body,
+// tolerant of the v1 and v2 marker tags. The bool is false when no metadata
+// line is present (a legacy or hand-edited comment); a present-but-corrupt
+// block returns an error so the caller can warn rather than silently lose
+// cross-run dedupe.
 func ExtractMeta(body string) (gate.Meta, bool, error) {
-	i := strings.Index(body, metaPrefix)
+	i := strings.Index(body, metaLocate)
 	if i < 0 {
 		return gate.Meta{}, false, nil
 	}
-	rest := body[i+len(metaPrefix):]
+	rest := body[i+len(metaLocate):]
 	j := strings.Index(rest, metaSuffix)
 	if j < 0 {
 		return gate.Meta{}, false, fmt.Errorf("meta block not terminated")
 	}
-	m, err := gate.DecodeMeta(strings.TrimSpace(rest[:j]))
+	inner := strings.TrimSpace(rest[:j]) // "vN <base64>"
+	// Drop the leading display-version token (e.g. "v2 ").
+	if sp := strings.IndexByte(inner, ' '); sp >= 0 && strings.HasPrefix(inner, "v") {
+		inner = inner[sp+1:]
+	}
+	m, err := gate.DecodeMeta(strings.TrimSpace(inner))
 	if err != nil {
 		return gate.Meta{}, false, err
 	}

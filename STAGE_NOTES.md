@@ -1,3 +1,39 @@
+# Deferred gates — live-validation batch (run after the stage-05 PR merges)
+
+These gates are **deferred, not skipped**. None is "done" until its evidence
+lands in the owning stage's section below. Run in this order in one session;
+tag `stage-05` only when ALL are clear.
+
+- [ ] **Batch setup** — fresh credit-capped OpenRouter key in Keychain
+  (`openrouter-sieve`), obtained per Addendum 1; verify
+  `anthropic/claude-sonnet-4.6` resolves with a 1-token ping before any full run.
+  (slug confirmed present in the OpenRouter catalog on 2026-07-06)
+- [ ] **stage-03 gate 4 + 5** — seeded private sandbox (~10 plants per
+  `testdata/sandbox/plants.md`, `{{PLANT_PASSWORD}}`-style placeholders
+  substituted at generation), live `--post` run + fix-push re-run (4d:
+  walkthrough edited in place, fixed plants → Resolved, zero duplicate inlines);
+  full calibration report (recall per plant, precision read, severity +
+  confidence histograms, token usage, proposed shipping defaults).
+- [ ] **stage-04 gate 2** — tag `v0.0.9-rc1` on main → release workflow → 4
+  binaries + checksums + raw assets published; verify by eye that the
+  skip-prerelease guard engaged and `v0` moved only because the bootstrap
+  override was explicitly passed.
+- [ ] **stage-04 gates 3–5** — hosted-runner `@v0` review on a sandbox PR (user
+  sets `SIEVE_API_KEY` in the sandbox repo's Actions secrets via the GitHub UI);
+  fork sim → clean notice, exit 0; `install.sh` (macOS) + Linux-runner step +
+  `go install`.
+- [ ] **stage-05 live** — sandbox PR three-push sequence (normal / fix /
+  force-push) with token-savings evidence; 👎 two inlines + resolve one thread →
+  `sieve learnings` → drafted-rule diff → commit → next run shows
+  `learnings: N rules active` and does not re-flag; wipe store → `sieve sync` →
+  `sieve stats` matches pre-wipe.
+- [ ] **Finalize defaults** — apply the calibration-derived `min_confidence` /
+  `inline_min_confidence` as a small reviewed PR (remove the TODO), merge.
+- [ ] **Tag `stage-05`** — only when all the above are clear. Then STOP; next is
+  the launch checklist.
+
+---
+
 # Stage 2 — Provider Layer + Review Pass + Findings Schema
 
 ## R0 — ZERO survey: lift vs rewrite

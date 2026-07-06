@@ -132,7 +132,7 @@ func notesSection(notes []gate.Finding, truncated bool) string {
 	return b.String()
 }
 
-func resolvedSection(resolved []gate.PriorFinding, truncated bool) string {
+func resolvedSection(resolved []gate.CompactFinding, truncated bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "<details><summary>✅ Resolved since last review (%d)</summary>\n\n", len(resolved))
 	if truncated {

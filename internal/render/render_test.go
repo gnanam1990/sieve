@@ -41,7 +41,7 @@ func sampleResult() gate.GateResult {
 	return gate.GateResult{
 		Inline:   inline,
 		Notes:    notes,
-		Resolved: []gate.PriorFinding{{Fingerprint: "deadbeefdeadbeef", Path: "internal/old/gone.go", Severity: "major"}},
+		Resolved: []gate.CompactFinding{{Fp: "deadbeefdeadbeef", Path: "internal/old/gone.go", Severity: "major"}},
 		Stats:    gate.Stats{InlineCount: 2, NotesCount: 3, ResolvedCount: 1},
 	}
 }
@@ -50,7 +50,7 @@ func sampleInput() WalkthroughInput {
 	res := sampleResult()
 	return WalkthroughInput{
 		Result:        res,
-		Meta:          gate.BuildMeta("headsha0011223344", "2026-07-06T12:00:00Z", res),
+		Meta:          gate.BuildMeta("headsha0011223344", "2026-07-06T12:00:00Z", res.ActiveCompact(nil), nil, []string{"deadbeefdeadbeef"}),
 		Skipped:       []SkippedFile{{Path: "go.sum", Reason: "default exclude"}, {Path: "docs/x.md", Reason: "config exclude: docs/**"}},
 		FilesReviewed: 6,
 		FilesSkipped:  2,
@@ -86,7 +86,7 @@ func TestWalkthroughGolden(t *testing.T) {
 	if !strings.HasPrefix(body, WalkthroughMarker) {
 		t.Error("walkthrough must start with the locator marker")
 	}
-	if !strings.Contains(body, metaPrefix) {
+	if !strings.Contains(body, metaLocate) {
 		t.Error("walkthrough must carry the metadata block")
 	}
 	for _, want := range []string{"🔴 critical", "🟠 major", "📝 Notes (3)", "✅ Resolved since last review (1)", "⏭️ Skipped files (2)", "18.2k", "1.4k", "sieve v0.3.0"} {
@@ -104,7 +104,7 @@ func TestMetaRoundTripThroughWalkthrough(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("extract meta: ok=%v err=%v", ok, err)
 	}
-	if m.HeadSHA != "headsha0011223344" || len(m.Fps) != 5 {
+	if m.HeadSHA != "headsha0011223344" || len(m.Findings) != 5 {
 		t.Fatalf("bad extracted meta: %+v", m)
 	}
 }
@@ -117,10 +117,10 @@ func TestExtractMetaAbsent(t *testing.T) {
 }
 
 func TestExtractMetaCorrupt(t *testing.T) {
-	if _, _, err := ExtractMeta(metaPrefix + "!!!notbase64!!!" + metaSuffix); err == nil {
+	if _, _, err := ExtractMeta(metaLocate + "!!!notbase64!!!" + metaSuffix); err == nil {
 		t.Error("corrupt meta must error")
 	}
-	if _, _, err := ExtractMeta(metaPrefix + "unterminated"); err == nil {
+	if _, _, err := ExtractMeta(metaLocate + "unterminated"); err == nil {
 		t.Error("unterminated meta must error")
 	}
 }
@@ -129,7 +129,7 @@ func TestExtractMetaCorrupt(t *testing.T) {
 func TestWalkthroughEmpty(t *testing.T) {
 	in := WalkthroughInput{
 		Result:  gate.GateResult{Stats: gate.Stats{}},
-		Meta:    gate.BuildMeta("h", "t", gate.GateResult{}),
+		Meta:    gate.BuildMeta("h", "t", nil, nil, nil),
 		Version: "v0.3.0",
 	}
 	body := Walkthrough(in)
