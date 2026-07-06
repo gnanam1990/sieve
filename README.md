@@ -104,6 +104,10 @@ dependencies; the Action downloads it directly (a few MB, checksum-verified) and
 runs it. A container would add a `docker pull`, a registry, and image-scanning
 overhead to buy nothing. Windows builds and cosign signing are on the backlog.
 
+## License
+
+[Apache-2.0](LICENSE).
+
 Draft PRs are skipped (exit 0, empty findings) unless `review.review_drafts: true`
 — this holds **even with `--post`**: a draft is never written to.
 

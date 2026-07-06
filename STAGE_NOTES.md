@@ -297,9 +297,8 @@ parts of 5) are pending the merge + push + a model API key.
   (tag `v0.0.9-rc1` → binary reports `sieve 0.0.9-rc1`); the release tag and the
   `VERSION` file keep the `v`. The Action downloads by tag name (with `v`), the
   walkthrough footer shows the `v`-less version. Both are internally consistent.
-- **No LICENSE yet.** sieve is a private repo; a LICENSE was not added
-  unilaterally. The archive `files:` and cask license are TODO'd — pick a license
-  before going public.
+- **License: Apache-2.0.** Added in the stage-04 PR at the user's direction; the
+  goreleaser archive re-includes `LICENSE`.
 
 ## Offline validation (done)
 

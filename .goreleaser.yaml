@@ -34,8 +34,7 @@ archives:
     name_template: "sieve_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
-      # TODO(pre-1.0): add a LICENSE file and re-include it here + set the cask
-      # license. sieve is a private repo today; choose a license before going public.
+      - LICENSE
   # Raw binary uploads named sieve_<os>_<arch> — what action.yml downloads.
   - id: rawbin
     ids: [sieve]
