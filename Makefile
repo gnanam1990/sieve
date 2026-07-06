@@ -15,6 +15,8 @@ COVER_GATE_MIN        := 90
 COVER_FINGERPRINT_MIN := 100
 COVER_POST_MIN        := 85
 COVER_RENDER_MIN      := 85
+COVER_INCREMENTAL_MIN := 90
+COVER_MEMORY_MIN      := 90
 COVER_OVERALL_MIN     := 85
 
 .PHONY: build test lint cover golden clean
@@ -44,6 +46,8 @@ cover:
 	fppkg=$(call pkgcover,./internal/fingerprint,./internal/fingerprint); \
 	postpkg=$(call pkgcover,./internal/post,./internal/post); \
 	renderpkg=$(call pkgcover,./internal/render,./internal/render); \
+	incrpkg=$(call pkgcover,./internal/incremental,./internal/incremental); \
+	mempkg=$(call pkgcover,./internal/memory,./internal/memory); \
 	echo "internal/diff coverage: $$diffpkg% (min $(COVER_DIFF_MIN)%)"; \
 	echo "internal/findings coverage: $$findpkg% (min $(COVER_FINDINGS_MIN)%)"; \
 	echo "internal/provider/... coverage: $$provpkg% (min $(COVER_PROVIDER_MIN)%)"; \
@@ -51,6 +55,8 @@ cover:
 	echo "internal/fingerprint coverage: $$fppkg% (min $(COVER_FINGERPRINT_MIN)%)"; \
 	echo "internal/post coverage: $$postpkg% (min $(COVER_POST_MIN)%)"; \
 	echo "internal/render coverage: $$renderpkg% (min $(COVER_RENDER_MIN)%)"; \
+	echo "internal/incremental coverage: $$incrpkg% (min $(COVER_INCREMENTAL_MIN)%)"; \
+	echo "internal/memory coverage: $$mempkg% (min $(COVER_MEMORY_MIN)%)"; \
 	echo "overall coverage: $$overall% (min $(COVER_OVERALL_MIN)%)"; \
 	rm -f coverage.tmp.out; \
 	fail=0; \
@@ -61,6 +67,8 @@ cover:
 	awk -v v="$$fppkg" -v min=$(COVER_FINGERPRINT_MIN) 'BEGIN{exit !(v+0>=min)}' || { echo "FAIL: internal/fingerprint below $(COVER_FINGERPRINT_MIN)%"; fail=1; }; \
 	awk -v v="$$postpkg" -v min=$(COVER_POST_MIN) 'BEGIN{exit !(v+0>=min)}' || { echo "FAIL: internal/post below $(COVER_POST_MIN)%"; fail=1; }; \
 	awk -v v="$$renderpkg" -v min=$(COVER_RENDER_MIN) 'BEGIN{exit !(v+0>=min)}' || { echo "FAIL: internal/render below $(COVER_RENDER_MIN)%"; fail=1; }; \
+	awk -v v="$$incrpkg" -v min=$(COVER_INCREMENTAL_MIN) 'BEGIN{exit !(v+0>=min)}' || { echo "FAIL: internal/incremental below $(COVER_INCREMENTAL_MIN)%"; fail=1; }; \
+	awk -v v="$$mempkg" -v min=$(COVER_MEMORY_MIN) 'BEGIN{exit !(v+0>=min)}' || { echo "FAIL: internal/memory below $(COVER_MEMORY_MIN)%"; fail=1; }; \
 	awk -v v="$$overall" -v min=$(COVER_OVERALL_MIN) 'BEGIN{exit !(v+0>=min)}' || { echo "FAIL: overall below $(COVER_OVERALL_MIN)%"; fail=1; }; \
 	exit $$fail
 
