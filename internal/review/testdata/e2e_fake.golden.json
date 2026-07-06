@@ -350,6 +350,36 @@
       "Body": "Line 3 replaces a numeric token with a word; downstream consumers sorting these lines will misorder it. Keep the numeral."
     }
   ],
+  "Gate": {
+    "Inline": [
+      {
+        "Path": "alpha.txt",
+        "Line": 3,
+        "Side": "RIGHT",
+        "Severity": "major",
+        "Confidence": 0.9,
+        "Category": "correctness",
+        "Title": "Spelled-out number breaks lexical ordering",
+        "Body": "Line 3 replaces a numeric token with a word; downstream consumers sorting these lines will misorder it. Keep the numeral.",
+        "Fingerprint": "d7e22de0ff6db77b",
+        "Tier": "inline",
+        "Repeated": false
+      }
+    ],
+    "Notes": null,
+    "Resolved": null,
+    "Stats": {
+      "InputFindings": 1,
+      "DuplicatesMerged": 0,
+      "FindingsBelowFloor": 0,
+      "InlineDemotedByCap": 0,
+      "InlineCount": 1,
+      "NotesCount": 0,
+      "RepeatedInline": 0,
+      "RepeatedNotes": 0,
+      "ResolvedCount": 0
+    }
+  },
   "Stats": {
     "FilesTotal": 2,
     "FilesReviewed": 2,
@@ -362,6 +392,7 @@
     "Requests": 1,
     "Retries": 0,
     "InputTokens": 840,
-    "OutputTokens": 187
+    "OutputTokens": 187,
+    "InlinePostFailed": 0
   }
 }

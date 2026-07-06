@@ -11,12 +11,21 @@ paths:
   #   - "**/*.gen.go"
 
 review:
-  max_comments: 10           # reserved — validated now, used in stage 3 (1-50)
-  min_confidence: 0.7        # reserved — validated now, used in stage 3 (0.0-1.0)
-  include_file_content: true # attach full changed-file contents when small
-  max_file_content_kb: 64    # per-file cap for content attachment
-  concurrency: 3             # parallel provider calls (1-8)
-  review_drafts: false       # draft PRs are skipped unless true
+  # Noise gate (stage 3). A finding below min_confidence is dropped. A
+  # finding reaches the *inline* tier only when its severity is at least
+  # inline_min_severity AND its confidence is at least inline_min_confidence;
+  # everything else surviving the floor goes to the walkthrough notes tier.
+  # Inline overflow past max_inline_comments is demoted to notes, never lost.
+  min_confidence: 0.6         # drop floor (0.0-1.0)
+  inline_min_confidence: 0.8  # inline tier confidence gate (>= min_confidence)
+  inline_min_severity: major  # inline tier severity gate (major | critical)
+  max_inline_comments: 10     # hard cap on inline comments per run (1-30)
+  include_file_content: true  # attach full changed-file contents when small
+  max_file_content_kb: 64     # per-file cap for content attachment
+  concurrency: 3              # parallel provider calls (1-8)
+  review_drafts: false        # draft PRs are skipped unless true
+  # NOTE: there is no `post` key. Posting is enabled ONLY by the --post flag,
+  # never by config, so a committed .sieve.yml can never turn writes on.
 
 provider:
   type: anthropic            # anthropic | openai-compat | fake

@@ -35,8 +35,10 @@ paths:
     - "docs/**"
     - "**/*.gen.go"
 review:
-  max_comments: 5
-  min_confidence: 0.9
+  max_inline_comments: 5
+  min_confidence: 0.5
+  inline_min_confidence: 0.9
+  inline_min_severity: critical
 provider:
   model: "some-model"
 `))
@@ -45,8 +47,10 @@ provider:
 	}
 	want := Default()
 	want.Paths = Paths{Exclude: []string{"docs/**", "**/*.gen.go"}}
-	want.Review.MaxComments = 5
-	want.Review.MinConfidence = 0.9
+	want.Review.MaxInlineComments = 5
+	want.Review.MinConfidence = 0.5
+	want.Review.InlineMinConfidence = 0.9
+	want.Review.InlineMinSeverity = "critical"
 	want.Provider.Model = "some-model"
 	if diff := cmp.Diff(want, cfg); diff != "" {
 		t.Errorf("config mismatch (-want +got):\n%s", diff)
@@ -58,7 +62,8 @@ func TestLoadPartialFileKeepsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Review.MaxComments != 10 || cfg.Review.MinConfidence != 0.7 {
+	if cfg.Review.MaxInlineComments != 10 || cfg.Review.MinConfidence != 0.6 ||
+		cfg.Review.InlineMinConfidence != 0.8 || cfg.Review.InlineMinSeverity != "major" {
 		t.Fatalf("partial file clobbered defaults: %+v", cfg.Review)
 	}
 }
@@ -73,21 +78,43 @@ func TestLoadUnknownKeyIsHardError(t *testing.T) {
 	}
 }
 
+// TestPostKeyIsRejected is the R1.1 safety invariant: no config key can ever
+// enable posting. A `post:` block anywhere is an unknown-key hard error.
+func TestPostKeyIsRejected(t *testing.T) {
+	for _, content := range []string{
+		"post: true\n",
+		"review:\n  post: true\n",
+		"provider:\n  post: aggressive\n",
+	} {
+		_, err := Load(writeConfig(t, content))
+		if err == nil {
+			t.Fatalf("post config must be an unknown-key error, got nil for %q", content)
+		}
+		if !strings.Contains(err.Error(), "post") {
+			t.Fatalf("error should name the post key, got: %v", err)
+		}
+	}
+}
+
 func TestLoadValidation(t *testing.T) {
 	cases := map[string]string{
-		"max_comments too low":   "review:\n  max_comments: 0\n",
-		"max_comments too high":  "review:\n  max_comments: 51\n",
-		"min_confidence too low": "review:\n  min_confidence: -0.1\n",
-		"min_confidence too big": "review:\n  min_confidence: 1.5\n",
-		"max_tokens too low":     "provider:\n  max_tokens: 255\n",
-		"max_tokens too high":    "provider:\n  max_tokens: 32769\n",
-		"temperature too high":   "provider:\n  temperature: 1.5\n",
-		"temperature negative":   "provider:\n  temperature: -0.1\n",
-		"concurrency too low":    "review:\n  concurrency: 0\n",
-		"concurrency too high":   "review:\n  concurrency: 9\n",
-		"timeout too low":        "provider:\n  timeout_seconds: 9\n",
-		"timeout too high":       "provider:\n  timeout_seconds: 601\n",
-		"bad provider type":      "provider:\n  type: bedrock\n",
+		"max_inline_comments too low":  "review:\n  max_inline_comments: 0\n",
+		"max_inline_comments too high": "review:\n  max_inline_comments: 31\n",
+		"min_confidence too low":       "review:\n  min_confidence: -0.1\n",
+		"min_confidence too big":       "review:\n  min_confidence: 1.5\n",
+		"inline_conf below floor":      "review:\n  min_confidence: 0.7\n  inline_min_confidence: 0.6\n",
+		"inline_conf out of range":     "review:\n  inline_min_confidence: 1.5\n",
+		"bad inline severity":          "review:\n  inline_min_severity: nit\n",
+		"minor inline severity":        "review:\n  inline_min_severity: minor\n",
+		"max_tokens too low":           "provider:\n  max_tokens: 255\n",
+		"max_tokens too high":          "provider:\n  max_tokens: 32769\n",
+		"temperature too high":         "provider:\n  temperature: 1.5\n",
+		"temperature negative":         "provider:\n  temperature: -0.1\n",
+		"concurrency too low":          "review:\n  concurrency: 0\n",
+		"concurrency too high":         "review:\n  concurrency: 9\n",
+		"timeout too low":              "provider:\n  timeout_seconds: 9\n",
+		"timeout too high":             "provider:\n  timeout_seconds: 601\n",
+		"bad provider type":            "provider:\n  type: bedrock\n",
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -99,16 +126,16 @@ func TestLoadValidation(t *testing.T) {
 }
 
 func TestEnvOverrides(t *testing.T) {
-	t.Setenv("SIEVE_MAX_COMMENTS", "20")
+	t.Setenv("SIEVE_MAX_INLINE_COMMENTS", "20")
 	t.Setenv("SIEVE_MIN_CONFIDENCE", "0.5")
 	t.Setenv("SIEVE_MODEL", "env-model")
 	t.Setenv("SIEVE_EXCLUDE", "a/**, b/**")
-	cfg, err := Load(writeConfig(t, "review:\n  max_comments: 5\n"))
+	cfg, err := Load(writeConfig(t, "review:\n  max_inline_comments: 5\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Review.MaxComments != 20 {
-		t.Errorf("env should override file: got %d", cfg.Review.MaxComments)
+	if cfg.Review.MaxInlineComments != 20 {
+		t.Errorf("env should override file: got %d", cfg.Review.MaxInlineComments)
 	}
 	if cfg.Review.MinConfidence != 0.5 || cfg.Provider.Model != "env-model" {
 		t.Errorf("env overrides not applied: %+v", cfg)
@@ -119,14 +146,14 @@ func TestEnvOverrides(t *testing.T) {
 }
 
 func TestEnvInvalid(t *testing.T) {
-	t.Setenv("SIEVE_MAX_COMMENTS", "lots")
+	t.Setenv("SIEVE_MAX_INLINE_COMMENTS", "lots")
 	if _, err := Load(filepath.Join(t.TempDir(), "nope.yml")); err == nil {
 		t.Fatal("want error for non-integer env, got nil")
 	}
 }
 
 func TestEnvOutOfRangeStillValidated(t *testing.T) {
-	t.Setenv("SIEVE_MAX_COMMENTS", "99")
+	t.Setenv("SIEVE_MAX_INLINE_COMMENTS", "99")
 	if _, err := Load(filepath.Join(t.TempDir(), "nope.yml")); err == nil {
 		t.Fatal("want validation error for out-of-range env value, got nil")
 	}

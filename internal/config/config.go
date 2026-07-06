@@ -25,10 +25,16 @@ type Paths struct {
 
 // Review holds review-behavior knobs.
 type Review struct {
-	// MaxComments and MinConfidence are reserved for stage 3; they are
-	// validated now so a bad config fails fast.
-	MaxComments   int     `yaml:"max_comments"`
-	MinConfidence float64 `yaml:"min_confidence"`
+	// Noise-gate tiering (stage 3). MinConfidence is the drop floor;
+	// InlineMinConfidence/InlineMinSeverity gate the inline tier;
+	// MaxInlineComments caps inline comments per run (overflow is demoted to
+	// notes, never dropped). There is deliberately no "post" key: posting is
+	// enabled only by the --post flag, never by config (see the safety model
+	// in the README).
+	MinConfidence       float64 `yaml:"min_confidence"`        // drop floor: below this a finding is discarded
+	InlineMinConfidence float64 `yaml:"inline_min_confidence"` // inline tier requires >= this
+	InlineMinSeverity   string  `yaml:"inline_min_severity"`   // inline tier requires severity >= this (major|critical)
+	MaxInlineComments   int     `yaml:"max_inline_comments"`   // hard cap on inline tier per run (1..30)
 
 	IncludeFileContent bool `yaml:"include_file_content"` // attach full changed-file contents when small
 	MaxFileContentKB   int  `yaml:"max_file_content_kb"`  // per-file cap for content attachment
@@ -61,12 +67,14 @@ type Config struct {
 func Default() Config {
 	return Config{
 		Review: Review{
-			MaxComments:        10,
-			MinConfidence:      0.7,
-			IncludeFileContent: true,
-			MaxFileContentKB:   64,
-			Concurrency:        3,
-			ReviewDrafts:       false,
+			MinConfidence:       0.6,
+			InlineMinConfidence: 0.8,
+			InlineMinSeverity:   "major",
+			MaxInlineComments:   10,
+			IncludeFileContent:  true,
+			MaxFileContentKB:    64,
+			Concurrency:         3,
+			ReviewDrafts:        false,
 		},
 		Provider: Provider{ //nolint:gosec // G101: APIKeyEnv holds the NAME of an env var, never a credential
 			Type:           "anthropic",
@@ -108,12 +116,12 @@ func Load(path string) (Config, error) {
 }
 
 func applyEnv(cfg *Config) error {
-	if v := os.Getenv("SIEVE_MAX_COMMENTS"); v != "" {
+	if v := os.Getenv("SIEVE_MAX_INLINE_COMMENTS"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return fmt.Errorf("SIEVE_MAX_COMMENTS: %q is not an integer", v)
+			return fmt.Errorf("SIEVE_MAX_INLINE_COMMENTS: %q is not an integer", v)
 		}
-		cfg.Review.MaxComments = n
+		cfg.Review.MaxInlineComments = n
 	}
 	if v := os.Getenv("SIEVE_MIN_CONFIDENCE"); v != "" {
 		f, err := strconv.ParseFloat(v, 64)
@@ -137,11 +145,22 @@ func applyEnv(cfg *Config) error {
 
 // Validate checks value ranges.
 func (c Config) Validate() error {
-	if c.Review.MaxComments < 1 || c.Review.MaxComments > 50 {
-		return fmt.Errorf("review.max_comments must be between 1 and 50, got %d", c.Review.MaxComments)
+	if c.Review.MaxInlineComments < 1 || c.Review.MaxInlineComments > 30 {
+		return fmt.Errorf("review.max_inline_comments must be between 1 and 30, got %d", c.Review.MaxInlineComments)
 	}
 	if c.Review.MinConfidence < 0.0 || c.Review.MinConfidence > 1.0 {
 		return fmt.Errorf("review.min_confidence must be between 0.0 and 1.0, got %g", c.Review.MinConfidence)
+	}
+	if c.Review.InlineMinConfidence < 0.0 || c.Review.InlineMinConfidence > 1.0 {
+		return fmt.Errorf("review.inline_min_confidence must be between 0.0 and 1.0, got %g", c.Review.InlineMinConfidence)
+	}
+	if c.Review.InlineMinConfidence < c.Review.MinConfidence {
+		return fmt.Errorf("review.inline_min_confidence (%g) must be >= review.min_confidence (%g)", c.Review.InlineMinConfidence, c.Review.MinConfidence)
+	}
+	switch c.Review.InlineMinSeverity {
+	case "major", "critical":
+	default:
+		return fmt.Errorf("review.inline_min_severity must be major or critical, got %q", c.Review.InlineMinSeverity)
 	}
 	if c.Review.MaxFileContentKB < 1 {
 		return fmt.Errorf("review.max_file_content_kb must be positive, got %d", c.Review.MaxFileContentKB)

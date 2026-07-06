@@ -19,7 +19,7 @@ import (
 const (
 	exitOK      = 0
 	exitError   = 1
-	exitPartial = 2 // context was truncated (diff cap or file-listing cap)
+	exitPartial = 2 // truncated context, a failed review batch, or a failed inline post
 )
 
 func main() {
@@ -56,11 +56,16 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 		token    = fs.String("token", "", "GitHub token (default: $GITHUB_TOKEN)")
 		cfgPath  = fs.String("config", config.DefaultFile, "path to config file")
 		dryRun   = fs.Bool("dry-run", false, "fetch + parse + filter, write ReviewContext JSON, no writes")
+		doPost   = fs.Bool("post", false, "post results to the PR (walkthrough + inline review); the ONLY way to enable writes")
 		jsonOnly = fs.Bool("json-only", false, "suppress the stderr summary (CI use)")
 		debug    = fs.Bool("debug", false, "debug logging")
 		apiURL   = fs.String("api-url", "", "GitHub API base URL override (testing)")
 	)
 	if err := fs.Parse(args); err != nil {
+		return exitError
+	}
+	if *dryRun && *doPost {
+		fmt.Fprintln(stderr, "error: --dry-run and --post are mutually exclusive")
 		return exitError
 	}
 
@@ -90,6 +95,7 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 		Token:      *token,
 		ConfigPath: *cfgPath,
 		DryRun:     *dryRun,
+		Post:       *doPost,
 		APIBaseURL: *apiURL,
 		Log:        logger,
 	})
@@ -104,7 +110,7 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 	if !*jsonOnly {
 		rc.WriteSummary(stderr)
 	}
-	if rc.Truncated || rc.Stats.BatchesFailed > 0 {
+	if rc.Truncated || rc.Stats.BatchesFailed > 0 || rc.Stats.InlinePostFailed > 0 {
 		return exitPartial
 	}
 	return exitOK
@@ -115,6 +121,7 @@ func usage(w io.Writer) {
 
 usage:
   sieve review --repo owner/name --pr N             LLM review, findings on stdout (read-only)
+  sieve review --repo owner/name --pr N --post      review AND post the results to the PR
   sieve review --repo owner/name --pr N --dry-run   context dump only, no LLM calls
   sieve version                                     print version
 
@@ -124,7 +131,12 @@ review flags:
   --token      GitHub token (default: $GITHUB_TOKEN)
   --config     config file (default: .sieve.yml)
   --dry-run    skip the LLM pass; no GitHub writes ever happen either way
+  --post       post the walkthrough + inline review to the PR — the ONLY switch
+               that enables writes; no config key can turn posting on
   --json-only  suppress the stderr summary
   --debug      debug logging
+
+exit codes: 0 ok · 1 error · 2 partial (truncated input, failed batch, or a
+failed inline comment post)
 `)
 }

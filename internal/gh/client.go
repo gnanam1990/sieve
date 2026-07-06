@@ -28,7 +28,7 @@ const maxAttempts = 4
 // Client talks to the GitHub REST API using only stdlib net/http.
 type Client struct {
 	BaseURL string
-	Token   string
+	Tokens  TokenSource
 	HTTP    *http.Client
 	Log     *slog.Logger
 
@@ -36,15 +36,16 @@ type Client struct {
 	RetryBase time.Duration
 }
 
-// New returns a Client for api.github.com. A missing token fails fast here
-// so every fetch path gives the same clear error.
-func New(token string, logger *slog.Logger) (*Client, error) {
-	if token == "" {
-		return nil, errors.New("no GitHub token: pass --token or set GITHUB_TOKEN")
+// New returns a Client for api.github.com. The token is resolved lazily from
+// the TokenSource at request time; an empty static token surfaces the same
+// clear "no GitHub token" error on the first fetch.
+func New(ts TokenSource, logger *slog.Logger) (*Client, error) {
+	if ts == nil {
+		return nil, errors.New("nil TokenSource")
 	}
 	return &Client{
 		BaseURL:   "https://api.github.com",
-		Token:     token,
+		Tokens:    ts,
 		HTTP:      &http.Client{Timeout: 30 * time.Second},
 		Log:       logger,
 		RetryBase: 500 * time.Millisecond,
@@ -171,6 +172,53 @@ func (c *Client) GetContents(ctx context.Context, owner, repo, path, ref string)
 	return data, nil
 }
 
+// IssueComment is one PR conversation comment (the issues/{n}/comments feed,
+// distinct from inline review comments). sieve's walkthrough lives here.
+type IssueComment struct {
+	ID   int64  `json:"id"`
+	Body string `json:"body"`
+	User struct {
+		Login string `json:"login"`
+	} `json:"user"`
+}
+
+// ListIssueComments pages through issues/{n}/comments at 100/page. Used to
+// locate the existing walkthrough comment by its hidden marker.
+func (c *Client) ListIssueComments(ctx context.Context, owner, repo string, number int) ([]IssueComment, error) {
+	var all []IssueComment
+	for page := 1; ; page++ {
+		url := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments?per_page=100&page=%d", c.BaseURL, owner, repo, number, page)
+		var batch []IssueComment
+		if err := c.getJSON(ctx, url, "application/vnd.github+json", &batch); err != nil {
+			return nil, fmt.Errorf("list issue comments %s/%s#%d page %d: %w", owner, repo, number, page, err)
+		}
+		all = append(all, batch...)
+		if len(batch) < 100 {
+			return all, nil
+		}
+	}
+}
+
+// Send applies auth and the standard GitHub headers to an already-built
+// request and issues it exactly once — no retry. Mutating requests are not
+// idempotent, so retrying a write risks duplicate comments; internal/post
+// builds the request (choosing the method) and inspects the status itself.
+// Read paths keep using the retrying getJSON/do helpers instead.
+//
+// The Accept header is left untouched when the caller has already set one.
+func (c *Client) Send(req *http.Request) (*http.Response, error) {
+	tok, err := c.Tokens.Token(req.Context())
+	if err != nil {
+		return nil, err
+	}
+	if req.Header.Get("Accept") == "" {
+		req.Header.Set("Accept", "application/vnd.github+json")
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	return c.HTTP.Do(req)
+}
+
 func (c *Client) getJSON(ctx context.Context, url, accept string, v any) error {
 	resp, err := c.do(ctx, url, accept)
 	if err != nil {
@@ -197,8 +245,12 @@ func (c *Client) do(ctx context.Context, url, accept string) (*http.Response, er
 		if err != nil {
 			return nil, err
 		}
+		tok, err := c.Tokens.Token(ctx)
+		if err != nil {
+			return nil, err
+		}
 		req.Header.Set("Accept", accept)
-		req.Header.Set("Authorization", "Bearer "+c.Token)
+		req.Header.Set("Authorization", "Bearer "+tok)
 		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 
 		resp, err := c.HTTP.Do(req)

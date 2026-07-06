@@ -1,7 +1,12 @@
 /sieve
 coverage.out
 coverage.*.out
+coverage.tmp.out
 *.test
+
+# sandbox recall (Gate 4) local artifacts
+/sandbox_review.json
+/.sandbox_workdir
 
 # never commit secrets
 .env

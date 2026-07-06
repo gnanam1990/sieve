@@ -129,7 +129,7 @@ func TestBuildInvalidRepo(t *testing.T) {
 }
 
 func TestBuildBadConfig(t *testing.T) {
-	if _, err := Build(context.Background(), testOptions(t, fakeGitHub(t), "review:\n  max_comments: 999\n")); err == nil {
+	if _, err := Build(context.Background(), testOptions(t, fakeGitHub(t), "review:\n  max_inline_comments: 999\n")); err == nil {
 		t.Fatal("want error for invalid config, got nil")
 	}
 }

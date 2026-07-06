@@ -61,6 +61,21 @@ type Finding struct {
 	Suggestion string  `json:",omitempty"` // replacement code for the exact range (rendered stage 3+)
 }
 
+// Rank returns a severity's ordinal (0 = critical, 3 = nit); lower is more
+// severe. Unknown severities rank after every known one.
+func Rank(s Severity) int {
+	if r, ok := severityRank[s]; ok {
+		return r
+	}
+	return len(severityRank)
+}
+
+// AtLeastAsSevere reports whether s is at least as severe as floor
+// (critical > major > minor > nit).
+func AtLeastAsSevere(s, floor Severity) bool {
+	return Rank(s) <= Rank(floor)
+}
+
 // Sort orders findings deterministically: severity (critical first), then
 // path, then line.
 func Sort(fs []Finding) {
