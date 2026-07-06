@@ -321,3 +321,74 @@ func TestIncludeFileContentExplicitFalse(t *testing.T) {
 		t.Fatal("explicit false must override the true default")
 	}
 }
+
+// TestMergeRepoReviewHonorsNoiseButNotSpend: a repo may tune noise/scope knobs
+// but the server keeps ownership of every spend-governing field.
+func TestMergeRepoReviewHonorsNoiseButNotSpend(t *testing.T) {
+	base, err := Load(writeConfig(t, "review:\n  pipeline: judge\n  roles:\n    generator: g\n    judge: j\n  max_run_tokens: 5000\n  min_confidence: 0.5\n"+
+		"providers:\n  g:\n    type: anthropic\n    model: gm\n    api_key_env: A\n  j:\n    type: anthropic\n    model: jm\n    api_key_env: B\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The untrusted repo tries to raise its own budget, switch to ensemble,
+	// pick providers, AND lower the noise floor.
+	repo := []byte("provider:\n  type: anthropic\n  model: EVIL\n  api_key_env: STEAL\n" +
+		"providers:\n  evil:\n    type: anthropic\n    model: EVIL\n" +
+		"review:\n  pipeline: ensemble\n  max_run_tokens: 99999999\n  concurrency: 8\n  min_confidence: 0.6\n  max_inline_comments: 3\n")
+	merged, err := MergeRepoReview(base, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Noise/scope knobs from the repo take effect.
+	if merged.Review.MinConfidence != 0.6 {
+		t.Errorf("repo min_confidence should apply, got %v", merged.Review.MinConfidence)
+	}
+	if merged.Review.MaxInlineComments != 3 {
+		t.Errorf("repo max_inline_comments should apply, got %v", merged.Review.MaxInlineComments)
+	}
+	// Spend-governing fields stay at the server's values.
+	if merged.Review.Pipeline != "judge" {
+		t.Errorf("repo must NOT change the pipeline, got %q", merged.Review.Pipeline)
+	}
+	if merged.Review.MaxRunTokens != 5000 {
+		t.Errorf("repo must NOT raise the token budget, got %d", merged.Review.MaxRunTokens)
+	}
+	if merged.Review.Concurrency != base.Review.Concurrency {
+		t.Errorf("repo must NOT change concurrency, got %d", merged.Review.Concurrency)
+	}
+	// Providers/keys are never sourced from the repo.
+	if _, ok := merged.Providers["evil"]; ok {
+		t.Error("repo providers must be ignored entirely")
+	}
+	if merged.Providers["g"].Model != "gm" {
+		t.Errorf("server providers must be untouched, got %q", merged.Providers["g"].Model)
+	}
+}
+
+func TestMergeRepoReviewNoBlockIsNoop(t *testing.T) {
+	base, err := Load(writeConfig(t, "review:\n  min_confidence: 0.4\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged, err := MergeRepoReview(base, []byte("# just a comment, no review block\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.Review.MinConfidence != 0.4 {
+		t.Fatalf("absent repo review must leave server settings, got %v", merged.Review.MinConfidence)
+	}
+}
+
+func TestMergeRepoReviewInvalidIsRejected(t *testing.T) {
+	base, err := Load(writeConfig(t, "review:\n  min_confidence: 0.4\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An out-of-range noise floor from the repo must be rejected (base returned).
+	if _, err := MergeRepoReview(base, []byte("review:\n  min_confidence: 5.0\n")); err == nil {
+		t.Fatal("invalid repo review must error")
+	}
+	if _, err := MergeRepoReview(base, []byte("review: [not, a, map]\n")); err == nil {
+		t.Fatal("malformed review block must error")
+	}
+}

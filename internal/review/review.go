@@ -143,6 +143,31 @@ type Options struct {
 	APIBaseURL string        // override for tests; empty means api.github.com
 	Now        func() string // metadata timestamp source; defaults to time.Now (UTC RFC3339)
 	Log        *slog.Logger
+
+	// Daemon-mode injection (stage 7). When set, TokenSource replaces the
+	// StaticTokenSource built from Token — App installation auth drops in exactly
+	// where a static token would. When set, Config replaces loading ConfigPath —
+	// the daemon pre-builds the server+repo-merged config itself.
+	TokenSource gh.TokenSource
+	Config      *config.Config
+}
+
+// loadConfig returns the injected config when the daemon supplied one, else it
+// loads from ConfigPath as the CLI does.
+func loadConfig(opts Options) (config.Config, error) {
+	if opts.Config != nil {
+		return *opts.Config, nil
+	}
+	return config.Load(opts.ConfigPath)
+}
+
+// tokenSource returns the injected App token source, or a static one built from
+// the resolved token string.
+func tokenSource(opts Options) gh.TokenSource {
+	if opts.TokenSource != nil {
+		return opts.TokenSource
+	}
+	return gh.NewStaticTokenSource(opts.Token)
 }
 
 // now returns the metadata timestamp, using the injected clock when set.
@@ -156,7 +181,7 @@ func (o Options) now() string {
 // Run performs the full pipeline: stage-1 context assembly, then (unless
 // DryRun or a skipped draft) the LLM review pass. Still zero GitHub writes.
 func Run(ctx context.Context, opts Options) (*ReviewContext, error) {
-	cfg, err := config.Load(opts.ConfigPath)
+	cfg, err := loadConfig(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +256,7 @@ func keptPaths(rc *ReviewContext) map[string]bool {
 
 // Build assembles the stage-1 ReviewContext only (no LLM).
 func Build(ctx context.Context, opts Options) (*ReviewContext, error) {
-	cfg, err := config.Load(opts.ConfigPath)
+	cfg, err := loadConfig(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +270,7 @@ func build(ctx context.Context, opts Options, cfg config.Config) (*ReviewContext
 		return nil, nil, fmt.Errorf("invalid --repo %q, want owner/name", opts.Repo)
 	}
 
-	client, err := gh.New(gh.NewStaticTokenSource(opts.Token), opts.Log)
+	client, err := gh.New(tokenSource(opts), opts.Log)
 	if err != nil {
 		return nil, nil, err
 	}

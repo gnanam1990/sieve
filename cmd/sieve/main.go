@@ -9,12 +9,15 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/gnanam1990/sieve/internal/config"
 	"github.com/gnanam1990/sieve/internal/gh"
 	"github.com/gnanam1990/sieve/internal/memory"
 	"github.com/gnanam1990/sieve/internal/review"
+	"github.com/gnanam1990/sieve/internal/server"
 	"github.com/gnanam1990/sieve/internal/version"
 )
 
@@ -42,6 +45,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runLearnings(args[1:], stdout, stderr)
 	case "stats":
 		return runStats(args[1:], stdout, stderr)
+	case "serve":
+		return runServe(args[1:], stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, version.Info())
 		return exitOK
@@ -172,6 +177,53 @@ func writeStepSummary(md string) {
 	}
 	defer f.Close() //nolint:errcheck // best-effort summary
 	_, _ = io.WriteString(f, md)
+}
+
+// runServe runs the self-host daemon: validate server.yml, then receive
+// webhooks and review PRs until SIGTERM/SIGINT.
+func runServe(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	cfgPath := fs.String("config", "/etc/sieve/server.yml", "path to server.yml")
+	debug := fs.Bool("debug", false, "debug logging")
+	if err := fs.Parse(args); err != nil {
+		return exitError
+	}
+
+	sc, err := server.LoadConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	// Startup validation: one line per check, then "ready" or the first failure.
+	checks, verr := sc.Validate()
+	for _, c := range checks {
+		mark := "ok"
+		if c.Err() != nil {
+			mark = "FAIL"
+		}
+		fmt.Fprintf(stdout, "[%s] %s\n", mark, c.Label())
+	}
+	if verr != nil {
+		fmt.Fprintln(stderr, "error:", verr)
+		return exitError
+	}
+
+	logger := newLogger(stderr, *debug)
+	srv, err := server.New(sc, server.Options{Log: logger})
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	fmt.Fprintln(stdout, "ready")
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	if err := srv.Serve(ctx); err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	return exitOK
 }
 
 // runSync rebuilds the local outcome store for a PR from GitHub.
@@ -307,6 +359,7 @@ usage:
   sieve sync --repo owner/name --pr N               rebuild the local outcome store from GitHub
   sieve learnings --repo owner/name                 draft repo rules from outcomes -> .sieve/learnings.md
   sieve stats --repo owner/name [--json]            per-category addressed-rate + reactions
+  sieve serve --config /etc/sieve/server.yml        run the self-host daemon (webhooks + App auth)
   sieve version                                     print version
 
 review flags:

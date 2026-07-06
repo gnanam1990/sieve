@@ -1,0 +1,28 @@
+[Unit]
+Description=sieve PR reviewer daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/sieve serve --config /etc/sieve/server.yml
+EnvironmentFile=/etc/sieve/sieve.env
+DynamicUser=yes
+StateDirectory=sieve
+Environment=HOME=/var/lib/sieve
+Restart=on-failure
+RestartSec=5s
+
+# Hardening
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sieve
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTuning=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+LoadCredential=app.pem:/etc/sieve/app.pem
+
+[Install]
+WantedBy=multi-user.target

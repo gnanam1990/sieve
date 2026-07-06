@@ -5,8 +5,10 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"strconv"
@@ -320,6 +322,99 @@ func applyProviderDefaults(p *Provider) {
 	if p.APIKeyEnv == "" && p.Type == "anthropic" {
 		p.APIKeyEnv = "ANTHROPIC_API_KEY"
 	}
+}
+
+// PrepareServerConfig normalizes and validates a config assembled from a daemon
+// server.yml (a review block seeded from Default plus a providers map). Provider
+// defaults are filled; per-provider key indirection is still resolved from the
+// process env at review time via ValidateForReview.
+func PrepareServerConfig(cfg *Config) error {
+	if err := normalizeProviders(cfg, false, cfg.Providers != nil); err != nil {
+		return err
+	}
+	return cfg.Validate()
+}
+
+// MergeRepoReview overlays a repository's .sieve.yml review settings onto a
+// base (server) config for daemon mode. Only the `review:` block is consulted —
+// any `provider:`/`providers:` in the untrusted repo file is ignored entirely,
+// and the spend-governing review fields (pipeline, roles, run-token budget,
+// concurrency, content attachment) are restored from the server so a repo can
+// tune WHAT gets flagged but never how much its reviews cost. The result is
+// re-validated; on any error the base config is returned unchanged.
+//
+// Decoding is strict (yaml.Decoder.KnownFields true): a repo file may carry
+// `provider`/`providers`/`paths` (kept here as discarded yaml.Node fields so the
+// strict decoder treats them as permitted-but-not-acted-on per spec) AND
+// `review`, but ANY other top-level key (a typo, or a future spend knob added to
+// the repo file) hard-errors so the spend-lockout cannot be silently bypassed.
+// The `review:` sub-block is strict-decoded the same way. An empty or
+// comment-only repo file (no mapping) is a no-op, not an error. See
+// TestMergeRepoReviewStrictRejectsUnknownKey and TestMergeRepoReviewNoBlockIsNoop.
+func MergeRepoReview(base Config, repoYAML []byte) (Config, error) {
+	// An empty or comment-only repo file (no mappings at all) is a no-op: the
+	// strict decoder would otherwise error with EOF, and a repo with no .sieve.yml
+	// content is the common case.
+	if len(bytes.TrimSpace(repoYAML)) == 0 {
+		return base, nil
+	}
+	// First strict decode: permit the spec-allowed top-level keys (provider,
+	// providers, paths are kept as yaml.Node so they parse without acting on;
+	// review is the overlay target). Any other top-level key is unknown and
+	// → hard error.
+	probe := struct {
+		Review    yaml.Node            `yaml:"review"`
+		Provider  yaml.Node            `yaml:"provider"`
+		Providers yaml.Node            `yaml:"providers"`
+		Paths     yaml.Node            `yaml:"paths"`
+	}{}
+	dec := yaml.NewDecoder(bytes.NewReader(repoYAML))
+	dec.KnownFields(true)
+	if err := dec.Decode(&probe); err != nil {
+		// A truly empty document (just newlines, no mapping) is not an error.
+		if errors.Is(err, io.EOF) {
+			return base, nil
+		}
+		return base, fmt.Errorf("parse repo .sieve.yml (strict): %w", err)
+	}
+	if probe.Review.Kind == 0 {
+		return base, nil // no review block; server settings stand
+	}
+	// Decode the repo's review over a copy of the server's, so unset repo fields
+	// keep the server value. Strict-decode the review node too: a typo'd
+	// review sub-key is rejected so the spend-lockout contract for review
+	// knobs cannot drift silently.
+	review := base.Review
+	reviewDec := yaml.NewDecoder(bytes.NewReader(repoYAML))
+	reviewDec.KnownFields(true)
+	probeFull := struct {
+		Review yaml.Node `yaml:"review"`
+		Provider yaml.Node `yaml:"provider"`
+		Providers yaml.Node `yaml:"providers"`
+		Paths yaml.Node `yaml:"paths"`
+	}{}
+	if err := reviewDec.Decode(&probeFull); err != nil {
+		return base, fmt.Errorf("parse repo .sieve.yml: %w", err)
+	}
+	if err := probeFull.Review.Decode(&review); err != nil {
+		return base, fmt.Errorf("parse repo review settings: %w", err)
+	}
+	// Server-owned, spend-governing fields: an untrusted repo does not get to
+	// choose the pipeline, its roles, the token budget, concurrency, or how much
+	// file content is attached.
+	review.Pipeline = base.Review.Pipeline
+	review.Roles = base.Review.Roles
+	review.MaxRunTokens = base.Review.MaxRunTokens
+	review.Concurrency = base.Review.Concurrency
+	review.IncludeFileContent = base.Review.IncludeFileContent
+	review.MaxFileContentKB = base.Review.MaxFileContentKB
+
+	merged := base
+	merged.Review = review
+	if err := merged.Validate(); err != nil {
+		return base, fmt.Errorf("repo review settings invalid: %w", err)
+	}
+	return merged, nil
 }
 
 // ActiveRoles returns the provider names the current pipeline will actually

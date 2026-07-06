@@ -74,6 +74,12 @@ func TestMutatingMethodsConfinedToPost(t *testing.T) {
 			return // LLM transport, not GitHub
 		case strings.HasSuffix(path, "gh/graphql.go"):
 			return // a GraphQL read query (POST to /graphql), not a REST mutation
+		case strings.HasPrefix(path, "../gh/appauth/"):
+			return // App auth POSTs to mint installation tokens — auth, not a PR
+			// write; the precise .Send guard still confines GitHub mutations to post
+		case strings.HasPrefix(path, "../webhook/"):
+			return // references http.MethodPost only to gate the INBOUND webhook
+			// request method; it makes no outbound GitHub calls at all
 		}
 		if mutating.MatchString(src) {
 			offenders = append(offenders, path)
