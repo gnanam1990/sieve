@@ -32,19 +32,23 @@ func inlineBody(fp, cat string, conf float64) string {
 // again yields the same aggregates.
 func TestSyncEquivalence(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	fpA, fpB, fpC := "aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb", "cccccccccccccccc"
+	fpA, fpB, fpC, fpD := "aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb", "cccccccccccccccc", "dddddddddddddddd"
 
-	// Live store, as recordOutcomes would write it: A/B active, C fixed
-	// (anchor-gone), A got a 👎, B's thread was dismissed.
+	// Live store, as recordOutcomes would write it across runs: A/B active, C
+	// fixed (anchor-gone), A got a 👎, B's thread dismissed. D was first
+	// dismissed then fixed — it must count as addressed, not dismissed.
 	store := memory.Open("github.com", "octo", "hello", discardLog())
 	store.Append(
 		memory.Event{Type: memory.TypeRun, PR: 7, InTok: 500, OutTok: 20},
 		memory.Event{Type: memory.TypeFinding, Fp: fpA, Path: "a.go", Sev: "major", Conf: 0.90, Cat: "bug", Tier: "inline", Cid: 100},
 		memory.Event{Type: memory.TypeFinding, Fp: fpB, Path: "a.go", Sev: "major", Conf: 0.80, Cat: "bug", Tier: "inline", Cid: 101},
 		memory.Event{Type: memory.TypeFinding, Fp: fpC, Path: "a.go", Sev: "major", Conf: 0.95, Cat: "bug", Tier: "inline", Cid: 102},
-		memory.Event{Type: memory.TypeResolved, Fp: fpC, Path: "a.go", How: memory.ResolvedAnchorGone},
+		memory.Event{Type: memory.TypeFinding, Fp: fpD, Path: "a.go", Sev: "major", Conf: 0.85, Cat: "bug", Tier: "inline", Cid: 103},
 		memory.Event{Type: memory.TypeReaction, Fp: fpA, Cid: 100, Minus: 1},
 		memory.Event{Type: memory.TypeDismissed, Fp: fpB, Cid: 101},
+		memory.Event{Type: memory.TypeDismissed, Fp: fpD, Cid: 103}, // dismissed while active...
+		memory.Event{Type: memory.TypeResolved, Fp: fpC, Path: "a.go", How: memory.ResolvedAnchorGone},
+		memory.Event{Type: memory.TypeResolved, Fp: fpD, Path: "a.go", How: memory.ResolvedAnchorGone}, // ...then fixed
 	)
 	liveEvents, _, _ := store.Read()
 	liveAgg := memory.Aggregate(liveEvents)
@@ -61,16 +65,21 @@ func TestSyncEquivalence(t *testing.T) {
 		p := r.URL.Path
 		switch {
 		case r.Method == http.MethodPost && p == "/graphql":
+			// B and D both have resolved threads; B is still active (dismissed),
+			// D is fixed (addressed, not dismissed).
 			fmt.Fprintf(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
-				{"isResolved":true,"comments":{"nodes":[{"databaseId":101,"body":%q}]}}]}}}}}`, inlineBody(fpB, "bug", 0.80))
+				{"isResolved":true,"comments":{"nodes":[{"databaseId":101,"body":%q}]}},
+				{"isResolved":true,"comments":{"nodes":[{"databaseId":103,"body":%q}]}}]}}}}}`,
+				inlineBody(fpB, "bug", 0.80), inlineBody(fpD, "bug", 0.85))
 		case r.Method == http.MethodGet && p == "/repos/octo/hello/issues/7/comments":
 			fmt.Fprintf(w, `[{"id":9,"body":%q,"user":{"login":"sieve"}}]`, walkthrough)
 		case r.Method == http.MethodGet && p == "/repos/octo/hello/pulls/7/comments":
 			fmt.Fprintf(w, `[
 				{"id":100,"path":"a.go","body":%q,"reactions":{"-1":1}},
 				{"id":101,"path":"a.go","body":%q},
-				{"id":102,"path":"a.go","body":%q}]`,
-				inlineBody(fpA, "bug", 0.90), inlineBody(fpB, "bug", 0.80), inlineBody(fpC, "bug", 0.95))
+				{"id":102,"path":"a.go","body":%q},
+				{"id":103,"path":"a.go","body":%q}]`,
+				inlineBody(fpA, "bug", 0.90), inlineBody(fpB, "bug", 0.80), inlineBody(fpC, "bug", 0.95), inlineBody(fpD, "bug", 0.85))
 		default:
 			fmt.Fprint(w, `{"number":7}`)
 		}

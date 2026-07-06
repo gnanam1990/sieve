@@ -142,6 +142,19 @@ func TestInjectionTruncatesOldestFirst(t *testing.T) {
 	}
 }
 
+// TestInjectionHardTruncatesOversizedSingleRule: even one rule bigger than the
+// cap is truncated (defensive; not reachable at MaxRuleLen but guards it).
+func TestInjectionHardTruncatesOversizedSingleRule(t *testing.T) {
+	body := Marker + "\n\n- " + strings.Repeat("y", InjectionCap*2) + " *(auto — 1 signals, 2026-07)*\n"
+	text, count := InjectionText(body)
+	if len(text) > InjectionCap {
+		t.Fatalf("oversized single rule not truncated: %d > %d", len(text), InjectionCap)
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
+	}
+}
+
 func TestInjectionEmptyWhenNoRules(t *testing.T) {
 	text, count := InjectionText("no marker here")
 	if text != "" || count != 0 {

@@ -89,14 +89,19 @@ func Aggregate(events []Event) []CategoryStat {
 		c.Posted++
 		c.PlusOne += plus[fp]
 		c.MinusOne += minus[fp]
-		if dismissed[fp] {
-			c.Dismissed++
-		}
+		// Addressed (a fix landed) takes precedence over dismissed (thread
+		// closed without a fix): a finding later fixed was addressed, not
+		// dismissed. Keeping them mutually exclusive both avoids double-counting
+		// and lets `sieve sync` — which sees only the current fixed state —
+		// reconstruct the same numbers.
 		if addressed[fp] {
 			c.AddressedByAnchor++
 			confAddr[f.cat] = append(confAddr[f.cat], f.conf)
 		} else {
 			confIgn[f.cat] = append(confIgn[f.cat], f.conf)
+			if dismissed[fp] {
+				c.Dismissed++
+			}
 		}
 	}
 

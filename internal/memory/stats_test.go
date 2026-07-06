@@ -52,6 +52,35 @@ func TestAggregateAddressedRate(t *testing.T) {
 	}
 }
 
+// TestAddressedExcludesDismissed: a finding dismissed then fixed counts as
+// addressed only (not double-counted), matching what sync can reconstruct.
+func TestAddressedExcludesDismissed(t *testing.T) {
+	stats := Aggregate([]Event{
+		inlineFinding("d", "bug", 0.9),
+		{Type: TypeDismissed, Fp: "d"},                              // dismissed while active...
+		{Type: TypeResolved, Fp: "d", How: ResolvedAnchorGone},     // ...then fixed
+	})
+	if len(stats) != 1 {
+		t.Fatalf("want 1 category, got %d", len(stats))
+	}
+	if stats[0].AddressedByAnchor != 1 || stats[0].Dismissed != 0 {
+		t.Fatalf("fixed finding must be addressed not dismissed: %+v", stats[0])
+	}
+}
+
+// TestReactionRemovalLatestWins: a later 0/0 snapshot supersedes an earlier
+// non-zero one, so a removed reaction is not left stale.
+func TestReactionRemovalLatestWins(t *testing.T) {
+	stats := Aggregate([]Event{
+		inlineFinding("r", "bug", 0.9),
+		{Type: TypeReaction, Fp: "r", Plus: 5}, // earlier snapshot
+		{Type: TypeReaction, Fp: "r", Plus: 0}, // reaction removed
+	})
+	if stats[0].PlusOne != 0 {
+		t.Fatalf("removed reaction must not stay counted, got %d", stats[0].PlusOne)
+	}
+}
+
 func TestAggregateSkipsNotesOnly(t *testing.T) {
 	events := []Event{{Type: TypeFinding, Fp: "n", Cat: "style", Tier: "notes", Conf: 0.5}}
 	stats := Aggregate(events)

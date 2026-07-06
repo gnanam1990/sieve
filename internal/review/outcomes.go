@@ -47,13 +47,13 @@ func recordOutcomes(store *memory.Store, rc *ReviewContext, res gate.GateResult,
 	}
 
 	// Reaction snapshots — inline cids only (cid != 0, i.e. sieve's posted
-	// comments). Emitted every run; aggregation keeps the latest.
+	// comments). Emitted every run for every sieve comment, INCLUDING a 0/0
+	// snapshot: a reaction that was later removed must be recorded so
+	// aggregation's latest-wins corrects the earlier non-zero count (and stays
+	// consistent with a rebuild from GitHub).
 	for _, c := range comments {
 		fp := render.ParseFpMarker(c.Body)
 		if fp == "" || c.ID == 0 {
-			continue
-		}
-		if c.Reactions.PlusOne == 0 && c.Reactions.MinusOne == 0 {
 			continue
 		}
 		events = append(events, memory.Event{

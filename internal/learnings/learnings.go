@@ -226,7 +226,11 @@ func InjectionText(body string) (text string, count int) {
 			fmt.Fprintf(&b, "- %s\n", r.Text)
 		}
 		if b.Len() <= InjectionCap || len(rules) <= 1 {
-			return b.String(), len(rules)
+			s := b.String()
+			if len(s) > InjectionCap { // a single oversized rule: hard-truncate
+				s = s[:InjectionCap]
+			}
+			return s, len(rules)
 		}
 		rules = rules[1:]
 	}
