@@ -49,6 +49,12 @@ type Review struct {
 	Pipeline string `yaml:"pipeline"` // single | judge | ensemble (stage 6)
 	Roles    Roles  `yaml:"roles"`    // which named provider fills each role
 	MaxRunTokens int `yaml:"max_run_tokens"` // pre-flight token budget; 0 = unlimited
+
+	// Stage 8 context-depth controls.
+	ContextDepth     string   `yaml:"context_depth"`     // symbols | repomap | blast
+	ContextMaxFiles  int      `yaml:"context_max_files"`  // cap files in repomap/blast
+	ContextMaxTokens int      `yaml:"context_max_tokens"` // rough token budget for context
+	ContextLangs     []string `yaml:"context_langs"`      // empty = all languages
 }
 
 // Roles binds pipeline roles to named providers (stage 6).
@@ -104,6 +110,9 @@ func Default() Config {
 			Incremental:         true,
 			Calibration:         false,
 			Pipeline:            "single",
+			ContextDepth:        "symbols",
+			ContextMaxFiles:     20,
+			ContextMaxTokens:    8000,
 		},
 		Provider: Provider{ //nolint:gosec // G101: APIKeyEnv holds the NAME of an env var, never a credential
 			Type:           "anthropic",
@@ -217,6 +226,17 @@ func (c Config) Validate() error {
 	}
 	if c.Review.MaxRunTokens < 0 {
 		return fmt.Errorf("review.max_run_tokens must be >= 0, got %d", c.Review.MaxRunTokens)
+	}
+	switch c.Review.ContextDepth {
+	case "symbols", "repomap", "blast":
+	default:
+		return fmt.Errorf("review.context_depth must be symbols, repomap, or blast; got %q", c.Review.ContextDepth)
+	}
+	if c.Review.ContextMaxFiles < 0 {
+		return fmt.Errorf("review.context_max_files must be >= 0, got %d", c.Review.ContextMaxFiles)
+	}
+	if c.Review.ContextMaxTokens < 0 {
+		return fmt.Errorf("review.context_max_tokens must be >= 0, got %d", c.Review.ContextMaxTokens)
 	}
 	for name, p := range c.Providers {
 		if err := validateProviderRanges(name, p); err != nil {

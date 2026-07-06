@@ -114,6 +114,10 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 		return exitError
 	}
 
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
 	rc, err := review.Run(context.Background(), review.Options{
 		Repo:       *repo,
 		PRNumber:   *pr,
@@ -124,6 +128,7 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 		Full:       *full,
 		APIBaseURL: *apiURL,
 		Log:        logger,
+		RepoPath:   cwd,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, "error:", err)
