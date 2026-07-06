@@ -1,0 +1,1 @@
+{"findings":[{"Path":"alpha.txt","Line":3,"Side":"RIGHT","Severity":"major","Confidence":0.9,"Category":"correctness","Title":"Spelled-out number breaks lexical ordering","Body":"Line 3 replaces a numeral with a word; sorters will misorder it."}]}

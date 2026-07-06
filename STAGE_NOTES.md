@@ -36,6 +36,13 @@ push the stage tags (`stage-05` … `stage-09`) as each stage's gates clear.
   model? ±3 matching?) **before** the batch proceeds. Plus one live judge
   `--post` run on a fresh sandbox PR — footer shows per-role tokens +
   `pipeline: judge`. Populate the README cost/precision table from the results.
+- [ ] **stage-07 live** — real GitHub App on the user's account (user creates it
+  in the UI; agent supplies the exact manifest/permission values), installed on
+  the sandbox; `sieve serve` on the dev machine + a tunnel (cloudflared/smee);
+  open a PR → review posts. Two fast pushes → coalescing visible in logs;
+  `kill -9` mid-queue → restart → replay verified. Walk `docs/self-hosting.md`
+  start-to-finish (every command actually run); record timings + capacity
+  numbers.
 - [ ] **Finalize defaults** — apply the calibration-derived `min_confidence` /
   `inline_min_confidence` as a small reviewed PR (remove the TODO), merge.
 - [ ] **Tag `stage-05`** — only when all the above are clear. Then STOP; next is
@@ -595,3 +602,115 @@ Deferred to the batch at the top of this file (`stage-06 live`: three-run
 single/judge/ensemble comparison on the seeded sandbox + one live judge `--post`
 run; populate the README cost/precision table from the results). Not run
 offline.
+
+---
+
+# Stage 7 — Daemon / Self-Host Mode
+
+## Decisions / smallest-reasonable-choice notes
+
+- **`AppTokenSource` drops into the existing `gh.TokenSource`.** The stage-3
+  interface was built for exactly this: `internal/gh/appauth` mints a per-repo
+  installation token and satisfies `gh.TokenSource`, so the pipeline consumes
+  App auth exactly as it consumes a static token. Hand-rolled RS256 JWS
+  (stdlib `crypto/rsa` + `crypto/sha256` + `encoding/base64`, no jwt dep);
+  installation tokens are cached until `expires_at − 5m` with single-flight
+  refresh (no stampede under a webhook burst; `-race` is the witness).
+- **Two minimal pipeline injections (stage-3 guard fix, as the prompt
+  anticipated).** `review.Options` gained `TokenSource gh.TokenSource` and
+  `Config *config.Config`; `Run`/`Build`/`build` use them when set and fall back
+  to the CLI's `Token` string + `config.Load(ConfigPath)` otherwise. This let
+  the daemon supply App auth and a pre-merged config without touching any review
+  logic. The broad-net `TestMutatingMethodsConfinedToPost` guard was widened to
+  allow `internal/gh/appauth` (auth POST to mint tokens — not a PR write) and
+  `internal/webhook` (references `http.MethodPost` only to gate the *inbound*
+  request method; it makes no outbound calls). The precise `.Send` guard —
+  the real GitHub-mutation enforcement — is unchanged and still passes.
+- **Repo `.sieve.yml` overrides review settings, never spend.**
+  `config.MergeRepoReview` decodes only the repo's `review:` block over the
+  server config and then **restores the server's spend-governing fields**
+  (pipeline, roles, max_run_tokens, concurrency, content attachment) — so an
+  untrusted repo can tune what gets flagged but cannot switch pipelines, raise
+  the token budget, or pick a provider/key. Any `provider:`/`providers:` in the
+  repo file is ignored entirely. A malformed or invalid repo config falls back
+  to the server config with a warning (the job is not failed).
+- **Webhook: verify before parse, dedupe, never log the body.**
+  `X-Hub-Signature-256` is HMAC-SHA256 checked with a constant-time compare
+  *before* the body is parsed; a mismatch is a counted 401 and the body is never
+  logged. `X-GitHub-Delivery` GUIDs dedupe via an LRU (4096) persisted to
+  `deliveries.jsonl` and reloaded on restart. Enqueue failures return 5xx and
+  are **not** recorded, so GitHub redelivers rather than the job being lost.
+  Unknown events always 200. Body capped at 1 MB.
+- **Queue: durable, coalescing, crash-replay.** Append-only `queue.jsonl`
+  (enqueue/done/dead records); startup replays the latest un-settled enqueue per
+  (repo, PR). At most one review per PR runs at once; a newer push replaces a
+  queued job in place, a push during a running review is queued behind it.
+  Retries with backoff (default 3 attempts) then dead-letter. Graceful shutdown
+  stops intake, drains in-flight (10 m), and leaves un-started jobs for replay.
+- **Server config is separate (`server.yml`), strict-decoded.** Startup prints
+  one line per check (app id, key file mode 0600/0400, webhook secret present,
+  data dir writable, review config valid) then `ready`; any failure aborts.
+  Keys stay in the process env via `api_key_env`/`webhook_secret_env`
+  indirection — never in the file.
+- **No new module deps.** Everything is stdlib + the already-vendored
+  doublestar (repo-allow globs) and yaml.v3.
+
+## Offline gates
+
+`golangci-lint` clean; full suite green `-race -shuffle=on`; overall coverage
+85.9% (≥85); the stage-7 floor packages — `appauth` 93.1%, `webhook` 90.2%,
+`queue` 95.1% — all ≥90. appauth: JWS segment fixture + rsa-verify, expiry math,
+single-flight under 24 concurrent callers. webhook: signature accept/reject
+(constant-time path), 1 MB body cap, unknown/ping/installation events 200,
+dedupe + persistence across restart, enqueue-failure-not-recorded. queue:
+coalescing matrix (queued-replace, running-then-queued), crash-replay
+(enqueue-without-done → replay → settled), dead-letter after retries,
+graceful-shutdown flush + un-started-jobs-survive. E2E: httptest GitHub (App
+token + REST) + fake provider — signed webhook in → App token minted → review
+posted → walkthrough asserted; repo `.sieve.yml` merge path and the real
+`Serve` listener + graceful shutdown exercised.
+
+## Adversarial review
+
+A 5-dimension adversarial pass (App auth, webhook/queue durability, server
+config, review integration, ops/docs) surfaced **one critical queue defect** from
+the multi-agent review; the follow-up gate run exposed **two additional
+implementation defects and two test bugs**, all fixed with regression tests.
+
+1. **[critical] Queue crash-replay dropped a newer head behind a running older
+   review.** `replay()` compared `settledIdx > enqueueIdx` per `(repo, PR)` key
+   without checking `HeadSHA`. If an older review's `done`/`dead` record was
+   written after a newer head was enqueued, the newer job was silently discarded
+   on the next boot. Fixed: settle records only settle an enqueue whose
+   `HeadSHA` matches. Regression:
+   `TestCrashReplayCoalesceOlderHeadSettle`.
+
+2. **[major] Retry backoff could collapse to zero via unsigned→signed wrap.**
+   `time.Duration(mrandUint64()) % base` wraps values above `MaxInt64` to
+   negative durations, making `time.After` return immediately. Roughly half of
+   all jitter draws were negative, so retries could fire in tight loops across
+   crashes instead of backing off. Fixed: compute jitter as
+   `time.Duration(mrandUint64() % uint64(base))`, keeping it in `[0, base)`.
+   Regression: `TestShutdownTimeoutAbortsRetries` (which now reliably aborts a
+   long-backoff retry).
+
+3. **[nit] `TestRunWithRetryContextCancel` tested the wrong cancellation
+   mechanism.** It cancelled the context passed to `Start`, but `Start` runs
+   workers on an independent `runCtx` so SIGTERM cannot abort an in-flight POST.
+   The test therefore failed and did not exercise the intended abort-during-
+   backoff path. Fixed: renamed to `TestShutdownTimeoutAbortsRetries` and uses
+   `Shutdown` with a short timeout, which is the real force-abort path.
+
+4. **[nit] `TestValidateHappyPath` had an off-by-one check.** It asserted
+   `len(checks) != 5` while the error message claimed to want 6; once
+   `Validate()` returned 6 checks the test failed with a confusing message.
+   Fixed: assert `len(checks) != 6`.
+
+No data races found under `-race -shuffle=on`; all Stage-7 packages remain above
+their 90% coverage floors.
+
+## Live validation
+
+Deferred to the batch at the top of this file (`stage-07 live`: real GitHub App
++ tunnel, coalescing-in-logs, kill-9 replay, `docs/self-hosting.md` walked
+start-to-finish). Not run offline.

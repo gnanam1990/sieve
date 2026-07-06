@@ -1,0 +1,23 @@
+# sieve daemon config — see docs/self-hosting.md
+listen: 127.0.0.1:8787              # TLS terminates at the reverse proxy
+app:
+  id: 123456                        # your GitHub App ID
+  private_key_path: /etc/sieve/app.pem   # PEM, mode 0600/0400
+webhook_secret_env: SIEVE_WEBHOOK_SECRET # env var holding the webhook secret
+data_dir: /var/lib/sieve            # queue + delivery + outcome stores
+repos_allow: ["your-org/*"]         # optional glob allowlist; omit = all installed repos
+workers: 2
+
+# Providers are SERVER-OWNED. A repo's .sieve.yml may override review settings
+# (min_confidence, excludes, …) but never the provider, model, or keys.
+providers:
+  default:
+    type: anthropic
+    model: claude-sonnet-5
+    api_key_env: ANTHROPIC_API_KEY
+
+review:
+  pipeline: single
+  roles:
+    reviewer: default
+  max_run_tokens: 300000            # refuse a surprise-huge PR before spending

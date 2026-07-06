@@ -392,6 +392,23 @@ pipeline multiplier (single 1×, judge 1.6×, ensemble n×) — exceeds the cap.
 exits `1` **before calling any provider**, so a surprise-large PR can't quietly
 run up a judge/ensemble bill.
 
+## Self-hosting (daemon mode)
+
+Prefer to run it yourself instead of per-repo Actions? `sieve serve` is a
+single-binary daemon: point a GitHub App's webhooks at one small VPS, bring your
+own keys, and it reviews every PR — App auth, a signature-verified webhook
+receiver, and a crash-safe coalescing queue, in ~one process.
+
+```sh
+sieve serve --config /etc/sieve/server.yml
+```
+
+Providers are **server-owned** — a repo's `.sieve.yml` may tune review settings
+(min_confidence, excludes, …) but never the model or keys, so an untrusted repo
+can't choose your spend. Full walkthrough (GitHub App setup, systemd unit,
+reverse-proxy TLS): **[docs/self-hosting.md](docs/self-hosting.md)**. Example
+config + unit file live in [`deploy/`](deploy/).
+
 ## Findings schema
 
 Each finding in `Findings[]`:
