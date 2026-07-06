@@ -92,10 +92,14 @@ push the stage tags (`stage-05` … `stage-09`) as each stage's gates clear.
   confirmed the `# Repository context` / `## Repo map` section is inserted before
   `# Changed files`. For this tiny sandbox `blast` found no extra files, so its
   estimate matched `symbols`; both are still under the cap.
-- [ ] **Finalize defaults** — apply the calibration-derived `min_confidence` /
-  `inline_min_confidence` as a small reviewed PR (remove the TODO), merge.
-- [ ] **Tag `stage-05`–`stage-09`** — push each stage tag after its live gate
-  clears. Then STOP; next is the v0.1.0 launch checklist.
+- [x] **Finalize defaults** — calibration across Stage 3 and Stage 6 found the
+  local Ollama model reported all findings at confidence ≥ 0.90, so the current
+  defaults (`min_confidence: 0.6`, `inline_min_confidence: 0.8`) already keep
+  every planted issue. No change recommended; the `// TODO(calibration)` marker
+  is not present in the current source.
+- [x] **Tag `stage-05`–`stage-09`** — `stage-05` and `stage-06` were already on
+  origin; `stage-07`, `stage-08`, and `stage-09` pushed to origin. STOP; next is
+  the v0.1.0 launch checklist.
 
 ---
 
