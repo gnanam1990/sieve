@@ -77,6 +77,7 @@ review:
     generator: fast
     judge: strong
   max_run_tokens: 300000          # refuse a surprise-huge PR before spending
+  context_depth: symbols          # daemon has no local checkout; repomap/blast fall back to symbols
 ```
 
 Keys are read from the process environment named by `api_key_env` /

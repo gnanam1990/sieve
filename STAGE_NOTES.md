@@ -776,3 +776,50 @@ Deferred to the batch at the top of this file. Stage 8-specific live checks:
 run `context_depth: symbols`, `repomap`, and `blast` against the sandbox repo
 and verify the prompt footer shows the expected context section without
 increasing token usage more than the configured caps.
+
+---
+
+# Stage 9 — Final Polish / Pre-Launch Hardening
+
+## Decisions / smallest-reasonable-choice notes
+
+- **No new features.** Stage 9 closes the offline Stages 6–9 sequence by
+  documenting Stages 7–8, enforcing the Stage 8 coverage floors in the
+  Makefile, and removing the calibration TODO marker. The actual
+  `min_confidence` / `inline_min_confidence` refinement is left to the live
+  batch, where it can be applied without another code change.
+- **README gains a "Repository context" section.** It documents
+  `review.context_depth` (`symbols` | `repomap` | `blast`) and the related caps,
+  and notes the daemon/Action fallback to `symbols` because there is no local
+  checkout on the review path.
+- **Makefile now gates Stage 8 packages at 90%.** `internal/grammar`,
+  `internal/symbols`, `internal/repomap`, and `internal/blast` are added to the
+  `make cover` floor list so the Stage 8 coverage work does not regress during
+  the live batch.
+- **Self-hosting docs note `context_depth: symbols`.** The daemon example config
+  explicitly sets `symbols` because `repomap`/`blast` require a repo root that
+  the webhook path does not provide; the code falls back silently, but the docs
+  make the limitation explicit.
+- **Dependency policy updated.** README now lists `malivvan/tree-sitter` and
+  `tetratelabs/wazero` alongside the existing deps.
+
+## Offline gates
+
+`go vet ./...` clean; `golangci-lint` clean; `make test` (`-race -shuffle=on`)
+green; `make cover` green with all floors: grammar 90.8%, symbols 90.3%,
+repomap 92.2%, blast 92.0%; overall 86.7% (≥85).
+
+## Adversarial review
+
+No dedicated multi-agent pass; self-review surfaced the grammar coverage floor
+after the Stage 8 lint fix (G115). The coverage regression was fixed by adding
+a regression test for `Node.Text` with a node whose start byte is beyond a
+truncated source, exercising both the end-clamp and the `start > end`
+branches.
+
+## Live validation
+
+Deferred to the batch at the top of this file. Stage 9 has no unique live
+steps beyond the general batch; its purpose is to leave `main` in a clean,
+documented, regression-guarded state for the live batch.
+
