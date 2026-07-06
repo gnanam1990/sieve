@@ -19,7 +19,7 @@ func TestAppendReplay(t *testing.T) {
 		Event{Ts: "t1", Type: TypeRun, PR: 7, HeadSHA: "sha", Model: "m", InTok: 100, OutTok: 20, Inline: 2},
 		Event{Ts: "t1", Type: TypeFinding, Fp: "abc", Path: "a.go", Sev: "major", Conf: 0.9, Cat: "bug", Tier: "inline", Cid: 42},
 	)
-	s.Append(Event{Ts: "t2", Type: TypeReaction, Fp: "abc", Cid: 42, React: -1})
+	s.Append(Event{Ts: "t2", Type: TypeReaction, Fp: "abc", Cid: 42, Minus: 1})
 
 	events, corrupt, err := s.Read()
 	if err != nil || corrupt != 0 {
@@ -31,7 +31,7 @@ func TestAppendReplay(t *testing.T) {
 	if events[0].Schema != Schema || events[0].Type != TypeRun || events[0].InTok != 100 {
 		t.Fatalf("run event wrong: %+v", events[0])
 	}
-	if events[2].React != -1 || events[2].Fp != "abc" {
+	if events[2].Minus != 1 || events[2].Fp != "abc" {
 		t.Fatalf("reaction event wrong: %+v", events[2])
 	}
 }

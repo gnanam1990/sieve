@@ -12,6 +12,7 @@ import (
 	"github.com/gnanam1990/sieve/internal/gate"
 	"github.com/gnanam1990/sieve/internal/gh"
 	"github.com/gnanam1990/sieve/internal/incremental"
+	"github.com/gnanam1990/sieve/internal/memory"
 	"github.com/gnanam1990/sieve/internal/post"
 	"github.com/gnanam1990/sieve/internal/render"
 	"github.com/gnanam1990/sieve/internal/version"
@@ -87,11 +88,17 @@ func gateAndPost(ctx context.Context, rc *ReviewContext, cfg config.Config, opts
 	}
 	rc.Stats.InlinePostFailed = failed
 
-	// Recover comment IDs for the metadata (best-effort; a failure leaves cids
-	// at 0, which the next run's sync/backfill reconciles).
-	cids, cErr := poster.CollectCids(ctx)
+	// Fetch existing comments (comment IDs + reaction snapshots) and resolved
+	// threads (dismissals). Best-effort — a failure leaves cids at 0 and skips
+	// the outcome record; the next run reconciles.
+	ghComments, cErr := poster.Comments(ctx)
 	if cErr != nil {
-		opts.Log.Warn("could not collect comment IDs; metadata cids are 0 this run", "err", cErr)
+		opts.Log.Warn("could not list review comments; metadata cids are 0 this run", "err", cErr)
+	}
+	cids := post.CidsOf(ghComments)
+	threads, tErr := poster.ResolvedThreads(ctx)
+	if tErr != nil {
+		opts.Log.Warn("could not fetch review threads; dismissals not recorded this run", "err", tErr)
 	}
 
 	meta := gate.BuildMeta(rc.HeadSHA, opts.now(), res.ActiveCompact(cids), loc.Meta.Resolved, fpsOf(res.Resolved))
@@ -102,6 +109,8 @@ func gateAndPost(ctx context.Context, rc *ReviewContext, cfg config.Config, opts
 		FilesReviewed: rc.Stats.FilesReviewed,
 		FilesSkipped:  rc.Stats.FilesSkipped,
 		Model:         modelLabel(cfg),
+		Learnings:     rc.learningsCount,
+		Calibrated:    cfg.Review.Calibration,
 		InputTokens:   rc.Stats.InputTokens,
 		OutputTokens:  rc.Stats.OutputTokens,
 		Version:       version.Version,
@@ -109,8 +118,16 @@ func gateAndPost(ctx context.Context, rc *ReviewContext, cfg config.Config, opts
 	if err := poster.UpsertWalkthrough(ctx, loc, walkthrough); err != nil {
 		return err
 	}
+
+	// Record outcomes to the local store (best-effort, never fails a review).
+	owner, name, _ := strings.Cut(rc.Repo, "/")
+	store := memory.Open(memoryHost, owner, name, opts.Log)
+	recordOutcomes(store, rc, res, plan, ghComments, threads, modelLabel(cfg), opts.now())
 	return nil
 }
+
+// memoryHost is the store host segment. sieve targets github.com only today.
+const memoryHost = "github.com"
 
 // fpsOf extracts the fingerprints of a resolved-finding slice.
 func fpsOf(cfs []gate.CompactFinding) []string {

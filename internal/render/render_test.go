@@ -207,6 +207,26 @@ func TestWhereRange(t *testing.T) {
 	}
 }
 
+func TestParseFpMarkerDefensive(t *testing.T) {
+	good := "0123456789abcdef"
+	body := "some comment\n" + FpMarkerPrefix + "v1 " + good + FpMarkerSuffix + "\n"
+	if got := ParseFpMarker(body); got != good {
+		t.Fatalf("valid marker: got %q", got)
+	}
+	// Untrusted input: reject forged/malformed values, never panic.
+	for _, bad := range []string{
+		"no marker here",
+		FpMarkerPrefix + "v1 not-hex-16-chars!!" + FpMarkerSuffix,   // non-hex
+		FpMarkerPrefix + "v1 0123" + FpMarkerSuffix,                 // too short
+		FpMarkerPrefix + "v1 0123456789ABCDEF" + FpMarkerSuffix,     // uppercase
+		FpMarkerPrefix + "v1 " + good, // unterminated
+	} {
+		if got := ParseFpMarker(bad); got != "" {
+			t.Errorf("malformed marker %q must parse to empty, got %q", bad, got)
+		}
+	}
+}
+
 func TestEscapeCell(t *testing.T) {
 	if got := escapeCell("a | b\nc"); got != "a \\| b c" {
 		t.Fatalf("escapeCell = %q", got)

@@ -7,6 +7,7 @@ import (
 
 	"github.com/gnanam1990/sieve/internal/findings"
 	"github.com/gnanam1990/sieve/internal/gate"
+	"github.com/gnanam1990/sieve/internal/gh"
 	"github.com/gnanam1990/sieve/internal/render"
 )
 
@@ -48,22 +49,38 @@ func BuildInlineComments(inline []gate.Finding, anchors *findings.Anchors) []Inl
 	return out
 }
 
+// Comments lists the PR's inline review comments (with reaction summaries).
+func (p *Poster) Comments(ctx context.Context) ([]gh.ReviewComment, error) {
+	return p.Client.ListReviewComments(ctx, p.Owner, p.Repo, p.PR)
+}
+
+// ResolvedThreads returns the PR's review threads with resolution state (for
+// dismissal detection).
+func (p *Poster) ResolvedThreads(ctx context.Context) ([]gh.ReviewThread, error) {
+	return p.Client.ResolvedThreads(ctx, p.Owner, p.Repo, p.PR)
+}
+
 // CollectCids lists the PR's inline review comments and maps sieve's own
 // comments (those carrying a fingerprint marker) from fingerprint to comment
 // ID. This recovers cids for the walkthrough metadata without server-side
 // state, and is the basis of sync and reaction fetching.
 func (p *Poster) CollectCids(ctx context.Context) (map[string]int64, error) {
-	comments, err := p.Client.ListReviewComments(ctx, p.Owner, p.Repo, p.PR)
+	comments, err := p.Comments(ctx)
 	if err != nil {
 		return nil, err
 	}
+	return CidsOf(comments), nil
+}
+
+// CidsOf maps sieve's comments (those with a fingerprint marker) to their IDs.
+func CidsOf(comments []gh.ReviewComment) map[string]int64 {
 	out := make(map[string]int64)
 	for _, c := range comments {
 		if fp := render.ParseFpMarker(c.Body); fp != "" {
 			out[fp] = c.ID
 		}
 	}
-	return out, nil
+	return out
 }
 
 // reviewPayload is the single-submission review body.

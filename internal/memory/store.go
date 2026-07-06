@@ -62,8 +62,13 @@ type Event struct {
 	Tier  string  `json:"tier,omitempty"`
 	Title string  `json:"title,omitempty"`
 	Cid   int64   `json:"cid,omitempty"`
-	How   string  `json:"how,omitempty"`   // resolved: re-review-absent | anchor-gone
-	React int     `json:"react,omitempty"` // reaction: +1 | -1
+	How   string  `json:"how,omitempty"` // resolved: re-review-absent | anchor-gone
+
+	// reaction: a per-comment snapshot of the current 👍/👎 counts. Each run
+	// re-emits the snapshot; aggregation keeps the latest per fingerprint, so
+	// repeated runs never double-count.
+	Plus  int `json:"plus,omitempty"`
+	Minus int `json:"minus,omitempty"`
 }
 
 // Store is a per-repo event log. A zero Path is a no-op store (unresolvable

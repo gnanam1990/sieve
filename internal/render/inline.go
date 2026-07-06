@@ -41,21 +41,26 @@ func Inline(f gate.Finding, anchors *findings.Anchors) string {
 	}
 
 	fmt.Fprintf(&b, "\n<sub>sieve · category `%s` · confidence %.2f</sub>\n", f.Category, f.Confidence)
-	// Hidden fingerprint marker: lets a later run recover this comment's ID by
-	// listing review comments and matching the fp (for meta v2 cids, reactions,
-	// and dismissal detection) without server-side state.
-	fmt.Fprintf(&b, "%s%s%s\n", FpMarkerPrefix, f.Fingerprint, FpMarkerSuffix)
+	// Hidden, versioned fingerprint marker: lets a later run recover this
+	// comment's ID by listing review comments and matching the fp (for meta v2
+	// cids, reactions, and dismissal detection) without server-side state.
+	fmt.Fprintf(&b, "%s%s %s%s\n", FpMarkerPrefix, fpMarkerVersion, f.Fingerprint, FpMarkerSuffix)
 	return b.String()
 }
 
-// Fingerprint marker delimiters embedded in inline comment bodies.
+// Fingerprint marker delimiters embedded in inline comment bodies. The prefix
+// is a version-agnostic locator; the version token follows it.
 const (
-	FpMarkerPrefix = "<!-- sieve:fp "
-	FpMarkerSuffix = " -->"
+	FpMarkerPrefix  = "<!-- sieve:fp "
+	FpMarkerSuffix  = " -->"
+	fpMarkerVersion = "v1"
 )
 
 // ParseFpMarker extracts the fingerprint from an inline comment body, or ""
-// when absent (a non-sieve comment or a legacy one).
+// when absent or malformed. Comment bodies are untrusted (anyone can edit or
+// forge one), so parsing is defensive: it strips the version token and accepts
+// the value only when it is a well-formed fingerprint (16 lowercase hex chars,
+// matching fingerprint.Len).
 func ParseFpMarker(body string) string {
 	i := strings.Index(body, FpMarkerPrefix)
 	if i < 0 {
@@ -66,7 +71,28 @@ func ParseFpMarker(body string) string {
 	if j < 0 {
 		return ""
 	}
-	return strings.TrimSpace(rest[:j])
+	inner := strings.TrimSpace(rest[:j]) // "v1 <fp>"
+	if sp := strings.IndexByte(inner, ' '); sp >= 0 && strings.HasPrefix(inner, "v") {
+		inner = strings.TrimSpace(inner[sp+1:])
+	}
+	if !wellFormedFp(inner) {
+		return ""
+	}
+	return inner
+}
+
+// wellFormedFp reports whether s is a 16-char lowercase-hex fingerprint.
+func wellFormedFp(s string) bool {
+	if len(s) != 16 {
+		return false
+	}
+	for _, c := range s {
+		isHex := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
+		if !isHex {
+			return false
+		}
+	}
+	return true
 }
 
 // suggestionCommittable implements the three-part eligibility test.

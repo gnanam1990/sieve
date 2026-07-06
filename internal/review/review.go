@@ -71,6 +71,8 @@ type ReviewContext struct {
 	Findings  []findings.Finding
 	Gate      *gate.GateResult `json:",omitempty"` // tier routing + drop/demote counters + fingerprints
 	Stats     Stats
+
+	learningsCount int // repository rules applied to the prompt (footer)
 }
 
 // Options configures a run.

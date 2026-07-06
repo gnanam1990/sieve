@@ -36,6 +36,8 @@ type WalkthroughInput struct {
 	FilesReviewed int
 	FilesSkipped  int
 	Model         string
+	Learnings     int  // repository rules applied (>0 shows in the footer)
+	Calibrated    bool // runtime confidence calibration was on
 	InputTokens   int
 	OutputTokens  int
 	Version       string
@@ -101,8 +103,15 @@ func build(in WalkthroughInput, tr truncFlags) string {
 		b.WriteString(skippedSection(in.Skipped, tr.skipped))
 	}
 
-	fmt.Fprintf(&b, "\n<sub>model `%s` · tokens in %s / out %s · sieve %s</sub>\n",
-		in.Model, humanK(in.InputTokens), humanK(in.OutputTokens), in.Version)
+	extra := ""
+	if in.Learnings > 0 {
+		extra += fmt.Sprintf(" · learnings: %d rules active", in.Learnings)
+	}
+	if in.Calibrated {
+		extra += " · calibration: on"
+	}
+	fmt.Fprintf(&b, "\n<sub>model `%s` · tokens in %s / out %s · sieve %s%s</sub>\n",
+		in.Model, humanK(in.InputTokens), humanK(in.OutputTokens), in.Version, extra)
 	return b.String()
 }
 

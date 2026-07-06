@@ -16,8 +16,9 @@ func TestAggregateAddressedRate(t *testing.T) {
 		inlineFinding("d", "style", 0.6), // notes-only style would not count; this is inline
 		{Type: TypeResolved, Fp: "a", How: ResolvedAnchorGone},
 		{Type: TypeResolved, Fp: "b", How: ResolvedReReviewAbsent}, // not an "addressed" fix
-		{Type: TypeReaction, Fp: "a", React: 1},
-		{Type: TypeReaction, Fp: "c", React: -1},
+		{Type: TypeReaction, Fp: "a", Plus: 1},
+		{Type: TypeReaction, Fp: "c", Minus: 1},
+		{Type: TypeReaction, Fp: "c", Minus: 1}, // re-run snapshot: latest wins, still 1
 		{Type: TypeDismissed, Fp: "c"},
 	}
 	stats := Aggregate(events)

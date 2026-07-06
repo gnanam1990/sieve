@@ -65,11 +65,10 @@ func Aggregate(events []Event) []CategoryStat {
 				addressed[e.Fp] = true
 			}
 		case TypeReaction:
-			if e.React > 0 {
-				plus[e.Fp]++
-			} else if e.React < 0 {
-				minus[e.Fp]++
-			}
+			// Latest snapshot wins (events are append-ordered), so re-running a
+			// review never double-counts reactions.
+			plus[e.Fp] = e.Plus
+			minus[e.Fp] = e.Minus
 		case TypeDismissed:
 			dismissed[e.Fp] = true
 		}

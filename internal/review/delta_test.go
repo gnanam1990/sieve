@@ -56,6 +56,8 @@ func (h *deltaHub) handle(w http.ResponseWriter, r *http.Request) {
 	defer h.mu.Unlock()
 	p := r.URL.Path
 	switch {
+	case r.Method == http.MethodPost && strings.HasSuffix(p, "/graphql"):
+		fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}`)
 	case r.Method == http.MethodGet && strings.Contains(p, "/compare/"):
 		fmt.Fprintf(w, `{"status":%q,"files":[%s]}`, h.compareStatus, filesJSON(h.compareFiles))
 	case r.Method == http.MethodGet && strings.HasSuffix(p, "/files"):
@@ -126,6 +128,7 @@ func filesJSON(files []string) string {
 
 func deltaOptions(t *testing.T, srvURL, fixture string, full bool) Options {
 	t.Helper()
+	t.Setenv("XDG_DATA_HOME", t.TempDir()) // isolate the outcome store from the real data dir
 	abs, _ := filepath.Abs(fixture)
 	cfgPath := filepath.Join(t.TempDir(), ".sieve.yml")
 	if err := os.WriteFile(cfgPath, []byte(fmt.Sprintf("provider:\n  type: fake\n  fixture: %q\n", abs)), 0o600); err != nil {

@@ -56,6 +56,10 @@ func (h *fakeHub) handle(w http.ResponseWriter, r *http.Request) {
 	defer h.mu.Unlock()
 	p := r.URL.Path
 	switch {
+	case r.Method == http.MethodPost && strings.HasSuffix(p, "/graphql"):
+		fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}`)
+	case r.Method == http.MethodGet && strings.HasSuffix(p, "/pulls/7/comments"):
+		fmt.Fprint(w, `[]`)
 	case r.Method == http.MethodGet && strings.HasSuffix(p, "/files"):
 		fmt.Fprint(w, `[{"filename":"alpha.txt","status":"modified"},{"filename":"beta.txt","status":"modified"}]`)
 	case r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "diff"):
@@ -121,6 +125,7 @@ func bodyField(r *http.Request) string {
 
 func postOptions(t *testing.T, srvURL, fixture string) Options {
 	t.Helper()
+	t.Setenv("XDG_DATA_HOME", t.TempDir()) // isolate the outcome store from the real data dir
 	abs, err := filepath.Abs(fixture)
 	if err != nil {
 		t.Fatal(err)
