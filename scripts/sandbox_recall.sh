@@ -36,7 +36,10 @@ require() { command -v "$1" >/dev/null 2>&1 || die "missing required tool: $1"; 
 owner() { gh api user --jq .login; }
 
 model_config() {
-  # Emits a .sieve.yml provider block for the first available frontier key.
+  # Emits a .sieve.yml provider block for the first available key.
+  # Ollama is supported for local calibration runs; hosted keys are preferred
+  # for final shipping calibration because the numbers inform the README's
+  # cost/precision table.
   if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
     cat <<YAML
 provider:
@@ -54,8 +57,18 @@ provider:
   api_key_env: OPENROUTER_API_KEY
   max_tokens: 4096
 YAML
+  elif [[ -n "${OLLAMA_API_KEY:-}" ]]; then
+    cat <<YAML
+provider:
+  type: openai-compat
+  base_url: http://localhost:11434/v1
+  model: ${SIEVE_MODEL:-qwen3-coder:480b-cloud}
+  api_key_env: OLLAMA_API_KEY
+  timeout_seconds: 300
+  max_tokens: 4096
+YAML
   else
-    die "set ANTHROPIC_API_KEY or OPENROUTER_API_KEY (a frontier model key) before running"
+    die "set ANTHROPIC_API_KEY, OPENROUTER_API_KEY, or OLLAMA_API_KEY before running"
   fi
 }
 
