@@ -7,7 +7,6 @@ package grammar
 import (
 	"context"
 	"fmt"
-	"math"
 	"sync"
 
 	ts "github.com/malivvan/tree-sitter"
@@ -111,14 +110,8 @@ func (n *Node) Text(src []byte) []byte {
 	if start > end {
 		start = end
 	}
-	return src[u64ToInt(start):u64ToInt(end)]
-}
-
-func u64ToInt(v uint64) int {
-	if v > uint64(math.MaxInt) {
-		return math.MaxInt
-	}
-	return int(v)
+	//nolint:gosec // G115: start/end are clamped to [0, len(src)] and therefore fit in int.
+	return src[int(start):int(end)]
 }
 
 // Query runs a tree-sitter query against the node and calls f for each match.

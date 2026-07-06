@@ -485,6 +485,33 @@ is reported with its reason.
 `go.mod` is deliberately **not** excluded — dependency changes are
 reviewable; `go.sum` is noise.
 
+## Repository context (Stage 8)
+
+sieve can attach lightweight, structured repository context to the prompt
+header. Depth is controlled by `review.context_depth`:
+
+| Depth | What is sent | Best for |
+|---|---|---|
+| `symbols` (default) | Extracted symbols (functions, types) from the changed files only | fast, safe default; no local checkout needed |
+| `repomap` | Repo-wide symbol/import index, capped by `context_max_files` | understanding cross-file structure |
+| `blast` | Repomap limited to direct + indirect files around the change | targeted impact surface |
+
+```yaml
+review:
+  context_depth: symbols        # symbols | repomap | blast
+  context_max_files: 20         # cap files in repomap/blast (0 = unlimited)
+  context_max_tokens: 8000      # rough token budget for context
+  context_langs: [go, c, cpp]    # empty = all languages
+```
+
+The CLI passes the current working directory as the repo root, so `repomap` and
+`blast` work out of the box. In GitHub Actions and daemon mode there is no
+checkout on the review path, so `repomap`/`blast` fall back to `symbols`
+quietly.
+
+Context is rendered under `# Repository context` in the prompt and is counted
+against the pre-flight token budget.
+
 ## Limits
 
 - Diff fetch capped at **5 MB** (truncated at the last complete file
@@ -506,6 +533,8 @@ private sandbox PR under your account with ~10 planted issues and runs
 `--post` with a frontier model (needs `ANTHROPIC_API_KEY` or
 `OPENROUTER_API_KEY`). See `STAGE_NOTES.md` for the recorded results.
 
-Dependency policy: `yaml.v3`, `doublestar`, `go-cmp` (tests only) — nothing
-else. GitHub REST and all LLM APIs are spoken via stdlib `net/http`. No
-streaming, no SSE: blocking completion calls with per-request timeouts.
+Dependency policy: `yaml.v3`, `doublestar`, `go-cmp` (tests only),
+`malivvan/tree-sitter` (wazero-backed C/C++ grammar parsing), and
+`tetratelabs/wazero` (WASM runtime for grammars). GitHub REST and all LLM APIs
+are spoken via stdlib `net/http`. No streaming, no SSE: blocking completion
+calls with per-request timeouts.

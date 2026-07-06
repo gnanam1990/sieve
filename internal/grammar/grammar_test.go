@@ -348,6 +348,54 @@ func TestTextWithTruncatedSource(t *testing.T) {
 	}
 }
 
+func TestTextStartAfterEnd(t *testing.T) {
+	rt, ctx := newRuntime(t)
+	defer rt.Close(ctx) //nolint:errcheck // best-effort
+
+	pool := NewPool(rt)
+	parser, err := pool.Acquire(ctx, "c")
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer pool.Release("c", parser)
+
+	src := []byte("int abc; int xyz;")
+	tree, err := parser.Parse(ctx, src)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	root, err := tree.RootNode(ctx)
+	if err != nil {
+		t.Fatalf("root: %v", err)
+	}
+
+	// Find an identifier node whose start is beyond a truncated source so the
+	// start > clamped-end branch is exercised.
+	var idents []*Node
+	err = rt.Query(ctx, "c", "(identifier) @name", root, src, func(captures map[string]*Node, _ map[string]string) error {
+		idents = append(idents, captures["name"])
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	var ident *Node
+	for _, n := range idents {
+		start, _ := n.StartByte(ctx)
+		if start > 4 {
+			ident = n
+			break
+		}
+	}
+	if ident == nil {
+		t.Fatal("no identifier beyond offset 4 found")
+	}
+	got := ident.Text(src[:4])
+	if len(got) != 0 {
+		t.Errorf("expected empty text when node starts after truncated source, got %q", got)
+	}
+}
+
 func TestNewParserWithInvalidLanguage(t *testing.T) {
 	rt, ctx := newRuntime(t)
 	defer rt.Close(ctx) //nolint:errcheck // best-effort

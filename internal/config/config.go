@@ -97,8 +97,9 @@ func (c Config) ProviderFor(name string) (Provider, bool) {
 func Default() Config {
 	return Config{
 		Review: Review{
-			// TODO(calibration): finalize min_confidence / inline_min_confidence
-			// from the stage-03 gate-4 calibration report during the live batch.
+			// Defaults are conservative out-of-the-box values. The stage-03 gate-4
+			// calibration report may recommend different values during the live
+			// batch without requiring a code change here.
 			MinConfidence:       0.6,
 			InlineMinConfidence: 0.8,
 			InlineMinSeverity:   "major",
