@@ -188,6 +188,64 @@ Severity markers: 🔴 critical · 🟠 major · 🟡 minor · ⚪ nit. The comm
 kept under GitHub's 65,536-char limit by truncating Notes, then Resolved, then
 Skipped — the metadata block is never truncated.
 
+## Incremental re-review
+
+After the first review, a push re-reviews **only the files that changed** since
+the last walkthrough (`GET compare/<last>...<head>`); every other finding is
+carried forward from the metadata unchanged, keeping its inline thread. A
+finding whose anchored line no longer exists in the diff is resolved at **zero
+model cost**. sieve falls back to a full review on a force-push/rebase (the base
+SHA is no longer an ancestor), an unchanged head SHA, a first run, or `--full` —
+the reason is in `Stats.FullReviewReason`, and `Stats.TokensSaved` estimates
+what the delta avoided. Toggle with `review.incremental` (default on).
+
+## Learning from outcomes
+
+sieve keeps a **local, append-only** outcome log per repo under
+`${XDG_DATA_HOME:-~/.local/share}/sieve/<host>/<owner>/<repo>/events.jsonl`:
+what it found, what got fixed, and how people reacted (👍/👎 and resolved
+threads). Writes are best-effort — they never fail a review. GitHub stays the
+source of truth: **`sieve sync --repo o/r --pr N`** rebuilds the log from the PR
+alone (idempotent), so the store is disposable.
+
+```sh
+sieve stats --repo owner/name          # per-category addressed-rate, 👍/👎, confidence
+sieve learnings --repo owner/name      # draft repo rules from repeated 👎/dismissals
+```
+
+**`sieve learnings`** clusters findings maintainers repeatedly rejected and
+drafts one *suppressive* rule per cluster (one imperative sentence, generalized —
+no line numbers, PR refs, or verbatim code), writing them into
+`.sieve/learnings.md` under a `<!-- sieve:learnings -->` marker (your own notes
+above the marker are preserved) and **printing a diff**. It **never commits** —
+you review and commit the rules yourself. This is deliberate: repo rules change
+what the bot flags, so a human must approve them; sieve makes no bot commits,
+ever. When `.sieve/learnings.md` is present at the PR head, its rules are
+injected into the review prompt (capped at 8 KB) and the walkthrough footer notes
+`learnings: N rules active`.
+
+### Confidence calibration (opt-in)
+
+With `review.calibration: true`, sieve scales each finding's confidence by its
+category's *addressed-rate* from the local store — `clamp(addressed_rate/0.5,
+0.5, 1.0)`, a no-op below a 10-finding sample — **before** the gate. It's
+transparent: the JSON records raw vs calibrated per finding and the footer notes
+`calibration: on`. Default off; never silently on.
+
+### GitHub Action note
+
+The store lives on the runner's ephemeral filesystem. To let learnings and stats
+accumulate across Action runs, cache it with `actions/cache` keyed on the repo:
+
+```yaml
+- uses: actions/cache@v4
+  with:
+    path: ~/.local/share/sieve
+    key: sieve-store-${{ github.repository }}
+```
+
+Losing the cache is harmless — `sieve sync` rebuilds it from the PR.
+
 ## Provider configuration
 
 API keys are **never** written in config. `.sieve.yml` holds the *name* of an

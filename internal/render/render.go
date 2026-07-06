@@ -36,6 +36,8 @@ type WalkthroughInput struct {
 	FilesReviewed int
 	FilesSkipped  int
 	Model         string
+	Learnings     int  // repository rules applied (>0 shows in the footer)
+	Calibrated    bool // runtime confidence calibration was on
 	InputTokens   int
 	OutputTokens  int
 	Version       string
@@ -101,8 +103,15 @@ func build(in WalkthroughInput, tr truncFlags) string {
 		b.WriteString(skippedSection(in.Skipped, tr.skipped))
 	}
 
-	fmt.Fprintf(&b, "\n<sub>model `%s` · tokens in %s / out %s · sieve %s</sub>\n",
-		in.Model, humanK(in.InputTokens), humanK(in.OutputTokens), in.Version)
+	extra := ""
+	if in.Learnings > 0 {
+		extra += fmt.Sprintf(" · learnings: %d rules active", in.Learnings)
+	}
+	if in.Calibrated {
+		extra += " · calibration: on"
+	}
+	fmt.Fprintf(&b, "\n<sub>model `%s` · tokens in %s / out %s · sieve %s%s</sub>\n",
+		in.Model, humanK(in.InputTokens), humanK(in.OutputTokens), in.Version, extra)
 	return b.String()
 }
 
@@ -132,7 +141,7 @@ func notesSection(notes []gate.Finding, truncated bool) string {
 	return b.String()
 }
 
-func resolvedSection(resolved []gate.PriorFinding, truncated bool) string {
+func resolvedSection(resolved []gate.CompactFinding, truncated bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "<details><summary>✅ Resolved since last review (%d)</summary>\n\n", len(resolved))
 	if truncated {

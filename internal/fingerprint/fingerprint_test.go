@@ -119,6 +119,28 @@ func TestContentIndexSides(t *testing.T) {
 	}
 }
 
+func TestContentsFor(t *testing.T) {
+	ci := NewContentIndex([]diff.FileDiff{{
+		NewPath: "p.go",
+		Hunks: []diff.Hunk{{Lines: []diff.Line{
+			{Kind: diff.AddedLine, NewNum: 1, Content: "added a"},
+			{Kind: diff.AddedLine, NewNum: 2, Content: "added b"},
+			{Kind: diff.RemovedLine, OldNum: 5, Content: "removed x"},
+		}}},
+	}})
+	right := ci.ContentsFor("p.go", "RIGHT")
+	if len(right) != 2 {
+		t.Fatalf("RIGHT contents = %v", right)
+	}
+	left := ci.ContentsFor("p.go", "LEFT")
+	if len(left) != 1 || left[0] != "removed x" {
+		t.Fatalf("LEFT contents = %v", left)
+	}
+	if len(ci.ContentsFor("other.go", "RIGHT")) != 0 {
+		t.Fatal("unknown path must be empty")
+	}
+}
+
 // TestContentIndexDeletePathFallback: a pure delete keys on OldPath.
 func TestContentIndexDeletePathFallback(t *testing.T) {
 	fd := diff.FileDiff{

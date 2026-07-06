@@ -114,6 +114,24 @@ func (ci *ContentIndex) Anchor(path, side string, line int) string {
 	return m[key{path, line}]
 }
 
+// ContentsFor returns every diff line's content for (path, side), in
+// unspecified order. Used by the delta review's "anchor gone" check: a prior
+// finding is resolved when none of the current diff lines reproduce its
+// fingerprint.
+func (ci *ContentIndex) ContentsFor(path, side string) []string {
+	m := ci.right
+	if side == string(sideLeft) {
+		m = ci.left
+	}
+	var out []string
+	for k, v := range m {
+		if k.path == path {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // sideLeft mirrors findings.SideLeft without importing findings (keeping this
 // package a leaf). The value must stay in sync with the GitHub side vocabulary.
 const sideLeft = "LEFT"

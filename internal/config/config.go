@@ -40,6 +40,9 @@ type Review struct {
 	MaxFileContentKB   int  `yaml:"max_file_content_kb"`  // per-file cap for content attachment
 	Concurrency        int  `yaml:"concurrency"`          // parallel provider calls
 	ReviewDrafts       bool `yaml:"review_drafts"`        // review draft PRs too
+
+	Incremental bool `yaml:"incremental"` // delta re-review of only changed files (stage 5)
+	Calibration bool `yaml:"calibration"` // runtime confidence calibration from addressed-rate (stage 5, opt-in)
 }
 
 // Provider holds LLM provider selection. There is deliberately no api_key
@@ -67,6 +70,8 @@ type Config struct {
 func Default() Config {
 	return Config{
 		Review: Review{
+			// TODO(calibration): finalize min_confidence / inline_min_confidence
+			// from the stage-03 gate-4 calibration report during the live batch.
 			MinConfidence:       0.6,
 			InlineMinConfidence: 0.8,
 			InlineMinSeverity:   "major",
@@ -75,6 +80,8 @@ func Default() Config {
 			MaxFileContentKB:    64,
 			Concurrency:         3,
 			ReviewDrafts:        false,
+			Incremental:         true,
+			Calibration:         false,
 		},
 		Provider: Provider{ //nolint:gosec // G101: APIKeyEnv holds the NAME of an env var, never a credential
 			Type:           "anthropic",

@@ -194,19 +194,19 @@ func TestRangeOverlapDedupe(t *testing.T) {
 }
 
 // TestCrossRunRepeatedAndResolved covers the metadata-driven dedupe: a
-// fingerprint seen last run is Repeated; a prior fingerprint absent this run
-// is Resolved.
+// fingerprint seen last run is Repeated (inheriting its cid); a prior
+// fingerprint absent this run is Resolved.
 func TestCrossRunRepeatedAndResolved(t *testing.T) {
 	cfg := testCfg()
 	fInline := mk("a.go", 1, findings.SeverityCritical, 0.95) // inline tier
 	fNote := mk("b.go", 2, findings.SeverityMinor, 0.70)      // notes tier
 	fs := []findings.Finding{fInline, fNote}
 
-	// Build the prior metadata from a first run, then add a fingerprint that
-	// won't reappear (a resolved finding).
+	// Prior compact records from a first run, with cids stamped, plus a
+	// fingerprint that won't reappear (a resolved finding).
 	first := Route(fs, emptyIndex(), nil, cfg)
-	prior := BuildMeta("headA", "t0", first).Fps
-	prior = append(prior, PriorFinding{Fingerprint: "deadbeefdeadbeef", Path: "gone.go", Severity: "major"})
+	prior := first.ActiveCompact(map[string]int64{first.Inline[0].Fingerprint: 4242})
+	prior = append(prior, CompactFinding{Fp: "deadbeefdeadbeef", Path: "gone.go", Severity: "major"})
 
 	second := Route(fs, emptyIndex(), prior, cfg)
 	if second.Stats.RepeatedInline != 1 || second.Stats.RepeatedNotes != 1 {
@@ -214,6 +214,9 @@ func TestCrossRunRepeatedAndResolved(t *testing.T) {
 	}
 	if !second.Inline[0].Repeated || !second.Notes[0].Repeated {
 		t.Fatal("reappearing findings must be marked Repeated")
+	}
+	if second.Inline[0].Cid != 4242 {
+		t.Fatalf("repeated inline must inherit its prior cid, got %d", second.Inline[0].Cid)
 	}
 	if len(second.Resolved) != 1 || second.Resolved[0].Path != "gone.go" {
 		t.Fatalf("want gone.go resolved, got %+v", second.Resolved)
@@ -255,36 +258,57 @@ func TestFingerprintAttached(t *testing.T) {
 	}
 }
 
+// TestMetaRoundTrip: v2 findings + resolved survive encode/decode.
 func TestMetaRoundTrip(t *testing.T) {
 	res := Route([]findings.Finding{
 		mk("a.go", 1, findings.SeverityCritical, 0.95),
 		mk("b.go", 2, findings.SeverityMinor, 0.70),
 	}, emptyIndex(), nil, testCfg())
-	m := BuildMeta("head123", "2026-07-06T00:00:00Z", res)
-	if m.Version != MetaVersion || m.HeadSHA != "head123" || len(m.Fps) != 2 {
+	m := BuildMeta("head123", "2026-07-06T00:00:00Z", res.ActiveCompact(nil), nil, []string{"aaaa"})
+	if m.Version != 2 || m.HeadSHA != "head123" || len(m.Findings) != 2 || len(m.Resolved) != 1 {
 		t.Fatalf("bad meta: %+v", m)
 	}
-	enc := EncodeMeta(m)
-	got, err := DecodeMeta(enc)
+	got, err := DecodeMeta(EncodeMeta(m))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.HeadSHA != "head123" || len(got.Fps) != 2 || got.Fps[0].Path != "a.go" {
+	if got.HeadSHA != "head123" || len(got.Findings) != 2 || got.Findings[0].Path != "a.go" {
 		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+	if got.Findings[0].Side != "R" || got.Findings[0].Category != "bug" {
+		t.Fatalf("compact record fields lost: %+v", got.Findings[0])
+	}
+	if len(got.Resolved) != 1 || got.Resolved[0] != "aaaa" {
+		t.Fatalf("resolved lost: %+v", got.Resolved)
 	}
 }
 
-// TestMetaDecodeToleratesUnknownFields is the forward-compat guarantee.
-func TestMetaDecodeToleratesUnknownFields(t *testing.T) {
-	raw := `{"v":1,"head_sha":"h","fps":[{"f":"abc","p":"x.go","s":"major","extra":"ignored"}],"ts":"t","future_key":42}`
-	enc := EncodeMeta(Meta{}) // placeholder to reuse base64 helper below
-	_ = enc
+// TestMetaV1Migration: a stage-3 v1 block decodes, reports IsV1, and
+// PriorForRoute synthesizes minimal records so cross-run dedupe still works.
+func TestMetaV1Migration(t *testing.T) {
+	v1 := `{"v":1,"head_sha":"h","fps":[{"f":"abc","p":"x.go","s":"major","extra":"ignored"}],"ts":"t","future_key":42}`
+	got, err := DecodeMeta(base64Std(v1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.IsV1() {
+		t.Fatal("v1 block must report IsV1")
+	}
+	pr := got.PriorForRoute()
+	if len(pr) != 1 || pr[0].Fp != "abc" || pr[0].Path != "x.go" {
+		t.Fatalf("v1 -> compact synthesis wrong: %+v", pr)
+	}
+}
+
+// TestV2DecodeToleratesUnknownFields is the forward-compat guarantee for v2.
+func TestV2DecodeToleratesUnknownFields(t *testing.T) {
+	raw := `{"v":2,"head_sha":"h","ts":"t","findings":[{"f":"abc","p":"x.go","l":5,"sd":"R","s":"major","c":0.9,"t":"T","cid":7,"cat":"bug","surprise":1}],"resolved":["z"],"newfield":true}`
 	got, err := DecodeMeta(base64Std(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.HeadSHA != "h" || len(got.Fps) != 1 || got.Fps[0].Fingerprint != "abc" {
-		t.Fatalf("unknown fields broke decode: %+v", got)
+	if got.IsV1() || len(got.Findings) != 1 || got.Findings[0].Cid != 7 {
+		t.Fatalf("v2 decode broke: %+v", got)
 	}
 }
 
@@ -297,15 +321,98 @@ func TestMetaDecodeBadInput(t *testing.T) {
 	}
 }
 
-// TestMetaFpsCap: more than 200 findings => fps truncated to 200.
-func TestMetaFpsCap(t *testing.T) {
+// TestMetaFindingsCap: >100 findings => compact records capped at 100.
+func TestMetaFindingsCap(t *testing.T) {
 	var fs []findings.Finding
-	for i := 0; i < 250; i++ {
+	for i := 0; i < 150; i++ {
 		fs = append(fs, mk(fmt.Sprintf("f%d.go", i), 1, findings.SeverityMinor, 0.70))
 	}
 	res := Route(fs, emptyIndex(), nil, testCfg())
-	m := BuildMeta("h", "t", res)
-	if len(m.Fps) != maxMetaFps {
-		t.Fatalf("fps not capped: %d, want %d", len(m.Fps), maxMetaFps)
+	m := BuildMeta("h", "t", res.ActiveCompact(nil), nil, nil)
+	if len(m.Findings) != maxMetaFindings {
+		t.Fatalf("findings not capped: %d, want %d", len(m.Findings), maxMetaFindings)
+	}
+}
+
+// TestCapFindingsEvictsNotesFirst: inline records survive the cap; notes are
+// dropped first.
+func TestCapFindingsEvictsNotesFirst(t *testing.T) {
+	var active []CompactFinding
+	for i := 0; i < 90; i++ {
+		active = append(active, CompactFinding{Fp: fmt.Sprintf("i%d", i), Tier: "inline"})
+	}
+	for i := 0; i < 30; i++ {
+		active = append(active, CompactFinding{Fp: fmt.Sprintf("n%d", i), Tier: "notes"})
+	}
+	m := BuildMeta("h", "t", active, nil, nil)
+	if len(m.Findings) != maxMetaFindings {
+		t.Fatalf("cap = %d, want %d", len(m.Findings), maxMetaFindings)
+	}
+	inlineKept := 0
+	for _, f := range m.Findings {
+		if f.Tier == "inline" {
+			inlineKept++
+		}
+	}
+	if inlineKept != 90 {
+		t.Fatalf("all 90 inline records must survive, got %d", inlineKept)
+	}
+}
+
+// TestRollResolved: dedup keeps newest position and caps oldest-first.
+func TestRollResolved(t *testing.T) {
+	got := rollResolved([]string{"a", "b", "c"}, []string{"b", "d"})
+	// "b" reappears -> moved to newest; order: a, c, b, d
+	want := []string{"a", "c", "b", "d"}
+	if len(got) != 4 {
+		t.Fatalf("got %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("rollResolved = %v, want %v", got, want)
+		}
+	}
+	// cap oldest-first
+	var many []string
+	for i := 0; i < 150; i++ {
+		many = append(many, fmt.Sprintf("r%d", i))
+	}
+	capped := rollResolved(many, nil)
+	if len(capped) != maxMetaResolved || capped[0] != "r50" {
+		t.Fatalf("resolved cap wrong: len %d first %s", len(capped), capped[0])
+	}
+}
+
+func TestShortExpandSide(t *testing.T) {
+	if ShortSide(findings.SideRight) != "R" || ShortSide(findings.SideLeft) != "L" {
+		t.Fatal("ShortSide")
+	}
+	if ExpandSide("R") != findings.SideRight || ExpandSide("L") != findings.SideLeft {
+		t.Fatal("ExpandSide")
+	}
+}
+
+// TestAddCarriedAndResolved covers the delta-assembly helpers.
+func TestAddCarriedAndResolved(t *testing.T) {
+	res := Route([]findings.Finding{mk("fresh.go", 1, findings.SeverityCritical, 0.95)}, emptyIndex(), nil, testCfg())
+	res.AddCarried([]CompactFinding{
+		{Fp: "carried1", Path: "old.go", Line: 9, Side: "R", Severity: "major", Conf: 0.9, Title: "carried inline", Cid: 11, Tier: "inline"},
+		{Fp: "carried2", Path: "old.go", Line: 3, Side: "R", Severity: "minor", Conf: 0.7, Title: "carried note", Tier: "notes"},
+	})
+	if len(res.Inline) != 2 || res.Stats.InlineCount != 2 {
+		t.Fatalf("carried inline not merged: %d", len(res.Inline))
+	}
+	var carried *Finding
+	for i := range res.Inline {
+		if res.Inline[i].Fingerprint == "carried1" {
+			carried = &res.Inline[i]
+		}
+	}
+	if carried == nil || !carried.Repeated || !carried.Carried || carried.Cid != 11 {
+		t.Fatalf("carried inline flags wrong: %+v", carried)
+	}
+	res.AddResolved([]CompactFinding{{Fp: "gone1", Path: "z.go", Severity: "major"}, {Fp: "gone1"}})
+	if res.Stats.ResolvedCount != 1 {
+		t.Fatalf("AddResolved dedupe failed: %d", res.Stats.ResolvedCount)
 	}
 }

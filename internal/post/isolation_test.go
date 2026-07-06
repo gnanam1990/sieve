@@ -72,6 +72,8 @@ func TestMutatingMethodsConfinedToPost(t *testing.T) {
 			return
 		case strings.HasPrefix(path, "../provider/"):
 			return // LLM transport, not GitHub
+		case strings.HasSuffix(path, "gh/graphql.go"):
+			return // a GraphQL read query (POST to /graphql), not a REST mutation
 		}
 		if mutating.MatchString(src) {
 			offenders = append(offenders, path)

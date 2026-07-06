@@ -2,6 +2,8 @@ package render
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/gnanam1990/sieve/internal/findings"
@@ -41,7 +43,79 @@ func Inline(f gate.Finding, anchors *findings.Anchors) string {
 	}
 
 	fmt.Fprintf(&b, "\n<sub>sieve · category `%s` · confidence %.2f</sub>\n", f.Category, f.Confidence)
+	// Hidden, versioned fingerprint marker: lets a later run recover this
+	// comment's ID by listing review comments and matching the fp (for meta v2
+	// cids, reactions, and dismissal detection) without server-side state.
+	fmt.Fprintf(&b, "%s%s %s%s\n", FpMarkerPrefix, fpMarkerVersion, f.Fingerprint, FpMarkerSuffix)
 	return b.String()
+}
+
+// Fingerprint marker delimiters embedded in inline comment bodies. The prefix
+// is a version-agnostic locator; the version token follows it.
+const (
+	FpMarkerPrefix  = "<!-- sieve:fp "
+	FpMarkerSuffix  = " -->"
+	fpMarkerVersion = "v1"
+)
+
+// ParseFpMarker extracts the fingerprint from an inline comment body, or ""
+// when absent or malformed. Comment bodies are untrusted (anyone can edit or
+// forge one), so parsing is defensive: it strips the version token and accepts
+// the value only when it is a well-formed fingerprint (16 lowercase hex chars,
+// matching fingerprint.Len).
+func ParseFpMarker(body string) string {
+	i := strings.Index(body, FpMarkerPrefix)
+	if i < 0 {
+		return ""
+	}
+	rest := body[i+len(FpMarkerPrefix):]
+	j := strings.Index(rest, FpMarkerSuffix)
+	if j < 0 {
+		return ""
+	}
+	inner := strings.TrimSpace(rest[:j]) // "v1 <fp>"
+	if sp := strings.IndexByte(inner, ' '); sp >= 0 && strings.HasPrefix(inner, "v") {
+		inner = strings.TrimSpace(inner[sp+1:])
+	}
+	if !wellFormedFp(inner) {
+		return ""
+	}
+	return inner
+}
+
+// footerRe matches the visible inline footer, e.g.
+// "<sub>sieve · category `bug` · confidence 0.86</sub>".
+var footerRe = regexp.MustCompile("category `([a-z]+)` · confidence (\\d\\.\\d+)")
+
+// ParseInline recovers a posted comment's fingerprint (from the hidden marker)
+// plus its category and confidence (from the visible footer). Used by `sieve
+// sync` to reconstruct the outcome store from GitHub. ok is false when the
+// comment is not a sieve inline comment.
+func ParseInline(body string) (fp, category string, confidence float64, ok bool) {
+	fp = ParseFpMarker(body)
+	if fp == "" {
+		return "", "", 0, false
+	}
+	m := footerRe.FindStringSubmatch(body)
+	if m == nil {
+		return fp, "", 0, true // fp present but footer unparseable
+	}
+	c, _ := strconv.ParseFloat(m[2], 64)
+	return fp, m[1], c, true
+}
+
+// wellFormedFp reports whether s is a 16-char lowercase-hex fingerprint.
+func wellFormedFp(s string) bool {
+	if len(s) != 16 {
+		return false
+	}
+	for _, c := range s {
+		isHex := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
+		if !isHex {
+			return false
+		}
+	}
+	return true
 }
 
 // suggestionCommittable implements the three-part eligibility test.
