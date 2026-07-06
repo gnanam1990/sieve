@@ -167,13 +167,16 @@ func (s *Store) Wipe() error {
 	return nil
 }
 
-// Rewrite replaces the store's contents with exactly these events (used by sync
-// so re-running is idempotent). Best-effort like Append.
+// Rewrite atomically replaces the store's contents with exactly these events
+// (used by sync so re-running is idempotent): it writes a sibling temp file and
+// renames it into place, so a crash mid-rewrite never truncates the store.
+// Best-effort like Append.
 func (s *Store) Rewrite(events []Event) {
 	if s.Path == "" {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil { //nolint:gosec // user data dir
+	dir := filepath.Dir(s.Path)
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // user data dir
 		s.log.Warn("memory: cannot create store dir; skipping rewrite", "err", err)
 		return
 	}
@@ -183,7 +186,25 @@ func (s *Store) Rewrite(events []Event) {
 		e.Schema = Schema
 		_ = enc.Encode(e) //nolint:errcheck // building an in-memory buffer
 	}
-	if err := os.WriteFile(s.Path, []byte(b.String()), 0o644); err != nil { //nolint:gosec // user data file
-		s.log.Warn("memory: cannot write store; skipping rewrite", "err", err)
+	tmp, err := os.CreateTemp(dir, ".events-*.tmp")
+	if err != nil {
+		s.log.Warn("memory: cannot create temp for rewrite; skipping", "err", err)
+		return
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.WriteString(b.String()); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		s.log.Warn("memory: temp write failed; skipping rewrite", "err", err)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		s.log.Warn("memory: temp close failed; skipping rewrite", "err", err)
+		return
+	}
+	if err := os.Rename(tmpName, s.Path); err != nil {
+		_ = os.Remove(tmpName)
+		s.log.Warn("memory: atomic rename failed; skipping rewrite", "err", err)
 	}
 }

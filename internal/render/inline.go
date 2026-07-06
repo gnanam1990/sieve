@@ -2,6 +2,8 @@ package render
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/gnanam1990/sieve/internal/findings"
@@ -79,6 +81,27 @@ func ParseFpMarker(body string) string {
 		return ""
 	}
 	return inner
+}
+
+// footerRe matches the visible inline footer, e.g.
+// "<sub>sieve · category `bug` · confidence 0.86</sub>".
+var footerRe = regexp.MustCompile("category `([a-z]+)` · confidence (\\d\\.\\d+)")
+
+// ParseInline recovers a posted comment's fingerprint (from the hidden marker)
+// plus its category and confidence (from the visible footer). Used by `sieve
+// sync` to reconstruct the outcome store from GitHub. ok is false when the
+// comment is not a sieve inline comment.
+func ParseInline(body string) (fp, category string, confidence float64, ok bool) {
+	fp = ParseFpMarker(body)
+	if fp == "" {
+		return "", "", 0, false
+	}
+	m := footerRe.FindStringSubmatch(body)
+	if m == nil {
+		return fp, "", 0, true // fp present but footer unparseable
+	}
+	c, _ := strconv.ParseFloat(m[2], 64)
+	return fp, m[1], c, true
 }
 
 // wellFormedFp reports whether s is a 16-char lowercase-hex fingerprint.
