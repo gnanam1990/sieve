@@ -41,7 +41,32 @@ func Inline(f gate.Finding, anchors *findings.Anchors) string {
 	}
 
 	fmt.Fprintf(&b, "\n<sub>sieve · category `%s` · confidence %.2f</sub>\n", f.Category, f.Confidence)
+	// Hidden fingerprint marker: lets a later run recover this comment's ID by
+	// listing review comments and matching the fp (for meta v2 cids, reactions,
+	// and dismissal detection) without server-side state.
+	fmt.Fprintf(&b, "%s%s%s\n", FpMarkerPrefix, f.Fingerprint, FpMarkerSuffix)
 	return b.String()
+}
+
+// Fingerprint marker delimiters embedded in inline comment bodies.
+const (
+	FpMarkerPrefix = "<!-- sieve:fp "
+	FpMarkerSuffix = " -->"
+)
+
+// ParseFpMarker extracts the fingerprint from an inline comment body, or ""
+// when absent (a non-sieve comment or a legacy one).
+func ParseFpMarker(body string) string {
+	i := strings.Index(body, FpMarkerPrefix)
+	if i < 0 {
+		return ""
+	}
+	rest := body[i+len(FpMarkerPrefix):]
+	j := strings.Index(rest, FpMarkerSuffix)
+	if j < 0 {
+		return ""
+	}
+	return strings.TrimSpace(rest[:j])
 }
 
 // suggestionCommittable implements the three-part eligibility test.

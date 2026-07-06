@@ -13,6 +13,7 @@ import (
 	"github.com/gnanam1990/sieve/internal/diff"
 	"github.com/gnanam1990/sieve/internal/findings"
 	"github.com/gnanam1990/sieve/internal/gh"
+	"github.com/gnanam1990/sieve/internal/incremental"
 	"github.com/gnanam1990/sieve/internal/prompt"
 	"github.com/gnanam1990/sieve/internal/provider"
 	"github.com/gnanam1990/sieve/internal/provider/anthropic"
@@ -48,25 +49,28 @@ func newProvider(cfg config.Config, opts Options, onRetry func()) (provider.Prov
 	return provider.WithRetry(p, opts.Log, onRetry), nil
 }
 
-// reviewPass runs prompts through the provider over bounded-parallel
-// batches, parses and anchor-validates findings, and merges them into rc. It
-// returns the kept (reviewed) file diffs so the caller can build the gate's
-// content index and inline-suggestion anchors without re-deriving them.
-func reviewPass(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg config.Config, opts Options) ([]diff.FileDiff, error) {
+// reviewPass runs prompts through the provider over bounded-parallel batches,
+// parses and anchor-validates findings, and merges them into rc. On a delta
+// plan it reviews only the plan's paths and records the delta stats.
+func reviewPass(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg config.Config, opts Options, plan incremental.Plan) error {
 	var retries atomic.Int64
 	p, err := newProvider(cfg, opts, func() { retries.Add(1) })
 	if err != nil {
-		return nil, err
+		return err
 	}
 	system, err := prompt.System()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	input, kept := buildPromptInput(ctx, rc, client, cfg, opts)
+	input, sent := buildPromptInput(ctx, rc, client, cfg, opts, plan)
+	if !plan.Full {
+		rc.Stats.FilesDeltaReviewed = len(sent)
+		rc.Stats.TokensSaved = estimateTokensSaved(rc, plan)
+	}
 	batches := prompt.BuildBatches(input)
 	markTruncated(rc, batches)
-	anchors := findings.NewAnchors(kept)
+	anchors := findings.NewAnchors(sent)
 
 	timeout := time.Duration(cfg.Provider.TimeoutSeconds) * time.Second
 	results := make([]batchResult, len(batches))
@@ -105,25 +109,29 @@ func reviewPass(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg c
 	findings.Sort(rc.Findings)
 	rc.Stats.FindingsTotal = len(rc.Findings)
 	rc.Stats.Retries = int(retries.Load())
-	return kept, nil
+	return nil
 }
 
-// buildPromptInput converts kept files into prompt input, optionally
-// attaching full file contents fetched at the head SHA.
-func buildPromptInput(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg config.Config, opts Options) (prompt.Input, []diff.FileDiff) {
+// buildPromptInput converts the reviewed files into prompt input, optionally
+// attaching full file contents fetched at the head SHA. On a delta plan only
+// the plan's paths are included; the returned slice is the files actually sent.
+func buildPromptInput(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg config.Config, opts Options, plan incremental.Plan) (prompt.Input, []diff.FileDiff) {
 	owner, name, _ := strings.Cut(rc.Repo, "/")
 	maxContent := cfg.Review.MaxFileContentKB * 1024
 	in := prompt.Input{Title: rc.Title, Body: rc.Body}
-	var kept []diff.FileDiff
+	var sent []diff.FileDiff
 	for _, fe := range rc.Files {
 		if fe.Skipped {
 			continue
 		}
-		kept = append(kept, fe.FileDiff)
 		path := fe.NewPath
 		if path == "" {
 			path = fe.OldPath
 		}
+		if !plan.Full && !plan.ReviewPaths[path] {
+			continue // delta: this file was not changed since the last review
+		}
+		sent = append(sent, fe.FileDiff)
 		f := prompt.File{Path: path, Status: fe.Status.String(), Diff: fe.FileDiff}
 		if cfg.Review.IncludeFileContent && fe.Status != diff.Deleted {
 			content, err := client.GetContents(ctx, owner, name, path, rc.HeadSHA)
@@ -138,7 +146,32 @@ func buildPromptInput(ctx context.Context, rc *ReviewContext, client *gh.Client,
 		}
 		in.Files = append(in.Files, f)
 	}
-	return in, kept
+	return in, sent
+}
+
+// estimateTokensSaved approximates the input tokens a delta run avoided: the
+// diff bytes of kept files that were NOT re-reviewed, over the ~4 bytes/token
+// heuristic used by the batcher. An estimate, not a measurement.
+func estimateTokensSaved(rc *ReviewContext, plan incremental.Plan) int {
+	bytes := 0
+	for _, fe := range rc.Files {
+		if fe.Skipped {
+			continue
+		}
+		path := fe.NewPath
+		if path == "" {
+			path = fe.OldPath
+		}
+		if plan.ReviewPaths[path] {
+			continue // reviewed: not saved
+		}
+		for _, h := range fe.Hunks {
+			for _, l := range h.Lines {
+				bytes += len(l.Content) + 1
+			}
+		}
+	}
+	return bytes / 4
 }
 
 func markTruncated(rc *ReviewContext, batches []prompt.Batch) {

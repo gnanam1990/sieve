@@ -393,6 +393,7 @@
     "Retries": 0,
     "InputTokens": 840,
     "OutputTokens": 187,
-    "InlinePostFailed": 0
+    "InlinePostFailed": 0,
+    "FullReviewReason": "read-only run (no prior walkthrough)"
   }
 }

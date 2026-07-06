@@ -45,6 +45,12 @@ type Stats struct {
 	OutputTokens    int
 
 	InlinePostFailed int // inline comments that failed to post (--post); >0 => exit 2
+
+	// Incremental re-review (stage 5).
+	FilesDeltaReviewed     int    `json:",omitempty"` // files re-reviewed in a delta run
+	FindingsCarriedForward int    `json:",omitempty"` // active findings carried from prior metadata unchanged
+	TokensSaved            int    `json:",omitempty"` // estimated input tokens avoided vs a full re-review
+	FullReviewReason       string `json:",omitempty"` // why a full review ran (delta not taken)
 }
 
 // ReviewContext is the full input a future review pass will consume, and
@@ -75,6 +81,7 @@ type Options struct {
 	ConfigPath string
 	DryRun     bool          // stop after context assembly; no LLM calls
 	Post       bool          // write results to the PR (walkthrough + inline review)
+	Full       bool          // force a full re-review (disable delta), --full
 	APIBaseURL string        // override for tests; empty means api.github.com
 	Now        func() string // metadata timestamp source; defaults to time.Now (UTC RFC3339)
 	Log        *slog.Logger
@@ -111,14 +118,51 @@ func Run(ctx context.Context, opts Options) (*ReviewContext, error) {
 		opts.Log.Info("PR is a draft; skipping review and any posting (set review.review_drafts: true to review drafts)")
 		return rc, nil
 	}
-	kept, err := reviewPass(ctx, rc, client, cfg, opts)
+
+	kept := keptDiffs(rc)
+
+	// Plan the review: a full re-review, or a delta that re-reviews only the
+	// files changed since the last posted walkthrough (post runs only).
+	plan, poster, loc, prior, err := planReview(ctx, rc, client, cfg, opts, kept)
 	if err != nil {
 		return nil, err
 	}
-	if err := gateAndPost(ctx, rc, client, cfg, opts, kept); err != nil {
+	rc.Stats.FullReviewReason = plan.FullReason
+
+	if err := reviewPass(ctx, rc, client, cfg, opts, plan); err != nil {
+		return nil, err
+	}
+	if err := gateAndPost(ctx, rc, cfg, opts, kept, plan, prior, poster, loc); err != nil {
 		return nil, err
 	}
 	return rc, nil
+}
+
+// keptDiffs returns the non-skipped file diffs (the review target set).
+func keptDiffs(rc *ReviewContext) []diff.FileDiff {
+	var out []diff.FileDiff
+	for _, fe := range rc.Files {
+		if !fe.Skipped {
+			out = append(out, fe.FileDiff)
+		}
+	}
+	return out
+}
+
+// keptPaths returns the path set of the non-skipped files.
+func keptPaths(rc *ReviewContext) map[string]bool {
+	out := make(map[string]bool)
+	for _, fe := range rc.Files {
+		if fe.Skipped {
+			continue
+		}
+		p := fe.NewPath
+		if p == "" {
+			p = fe.OldPath
+		}
+		out[p] = true
+	}
+	return out
 }
 
 // Build assembles the stage-1 ReviewContext only (no LLM).

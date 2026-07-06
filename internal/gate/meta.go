@@ -121,17 +121,11 @@ func ExpandSide(s string) findings.Side {
 	return findings.SideRight
 }
 
-// truncateTitle bounds a compact record's title.
-func truncateTitle(s string) string {
-	const maxLen = 80
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen]
-}
-
 // compactOf builds a compact record from a routed finding and its posted
-// comment ID (0 if not posted inline).
+// comment ID (0 if not posted inline). The title is stored in full (findings
+// already bound it to <=120 chars) rather than truncated to the spec's 80: the
+// "anchor gone" resolution check recomputes the content fingerprint from the
+// title, so any truncation would break the match. Noted in STAGE_NOTES.
 func compactOf(f Finding, cid int64) CompactFinding {
 	return CompactFinding{
 		Fp:       f.Fingerprint,
@@ -141,7 +135,7 @@ func compactOf(f Finding, cid int64) CompactFinding {
 		Side:     ShortSide(f.Side),
 		Severity: string(f.Severity),
 		Conf:     f.Confidence,
-		Title:    truncateTitle(f.Title),
+		Title:    f.Title,
 		Cid:      cid,
 		Category: f.Category,
 		Tier:     f.Tier.String(),

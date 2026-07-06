@@ -11,49 +11,90 @@ import (
 	"github.com/gnanam1990/sieve/internal/fingerprint"
 	"github.com/gnanam1990/sieve/internal/gate"
 	"github.com/gnanam1990/sieve/internal/gh"
+	"github.com/gnanam1990/sieve/internal/incremental"
 	"github.com/gnanam1990/sieve/internal/post"
 	"github.com/gnanam1990/sieve/internal/render"
 	"github.com/gnanam1990/sieve/internal/version"
 )
 
-// gateAndPost routes the validated findings through the noise gate — always,
-// so the gate/tier decisions land in the JSON output — and, only when --post
-// is set, writes the walkthrough and inline review to the PR.
-//
-// Failure model (R7): a walkthrough failure is returned as an error (exit 1,
-// nothing else attempted); a partial inline failure is recorded in
-// Stats.InlinePostFailed (exit 2) without failing the run.
-func gateAndPost(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg config.Config, opts Options, kept []diff.FileDiff) error {
-	idx := fingerprint.NewContentIndex(kept)
-
-	var prior []gate.CompactFinding
-	var priorResolved []string
-	var poster *post.Poster
-	var loc post.Locator
-
-	if opts.Post {
-		owner, name, _ := strings.Cut(rc.Repo, "/")
-		poster = &post.Poster{Client: client, Owner: owner, Repo: name, PR: rc.PRNumber, Log: opts.Log}
-		var err error
-		loc, err = poster.LocateWalkthrough(ctx)
-		if err != nil {
-			return fmt.Errorf("locate existing walkthrough: %w", err)
-		}
-		if loc.HasMeta {
-			prior = loc.Meta.PriorForRoute()
-			priorResolved = loc.Meta.Resolved
-		}
+// planReview locates the prior walkthrough (post runs only) and decides the
+// delta plan: a full re-review, or one scoped to files changed since the last
+// review with the rest of the findings carried forward. Non-post runs always
+// do a full review (there is no prior walkthrough to delta from).
+func planReview(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg config.Config, opts Options, kept []diff.FileDiff) (incremental.Plan, *post.Poster, post.Locator, []gate.CompactFinding, error) {
+	if !opts.Post {
+		return incremental.Plan{Full: true, FullReason: "read-only run (no prior walkthrough)"}, nil, post.Locator{}, nil, nil
+	}
+	owner, name, _ := strings.Cut(rc.Repo, "/")
+	poster := &post.Poster{Client: client, Owner: owner, Repo: name, PR: rc.PRNumber, Log: opts.Log}
+	loc, err := poster.LocateWalkthrough(ctx)
+	if err != nil {
+		return incremental.Plan{}, nil, post.Locator{}, nil, fmt.Errorf("locate existing walkthrough: %w", err)
 	}
 
-	res := gate.Route(rc.Findings, idx, prior, cfg.Review)
+	in := incremental.Inputs{
+		Enabled:    cfg.Review.Incremental,
+		ForceFull:  opts.Full,
+		HasPrior:   loc.HasMeta,
+		PriorMeta:  loc.Meta,
+		HeadSHA:    rc.HeadSHA,
+		PRPaths:    keptPaths(rc),
+		CurrentIdx: fingerprint.NewContentIndex(kept),
+	}
+	var prior []gate.CompactFinding
+	if loc.HasMeta {
+		prior = loc.Meta.PriorForRoute()
+		if !loc.Meta.IsV1() && loc.Meta.HeadSHA != "" && loc.Meta.HeadSHA != rc.HeadSHA {
+			cmp, found, cErr := client.Compare(ctx, owner, name, loc.Meta.HeadSHA, rc.HeadSHA)
+			if cErr != nil {
+				return incremental.Plan{}, nil, post.Locator{}, nil, fmt.Errorf("compare for delta review: %w", cErr)
+			}
+			in.Compare, in.CompareOK = cmp, found
+		}
+	}
+	return incremental.Decide(in), poster, loc, prior, nil
+}
+
+// gateAndPost routes the fresh findings through the noise gate, merges any
+// carried-forward findings and anchor-gone resolutions (delta), records the
+// gate result in the JSON output, and — only when --post is set — writes the
+// PR.
+//
+// Posting order (stage 5): the inline review is submitted first so its comment
+// IDs can be recovered and stamped into the walkthrough metadata (cids power
+// carry-forward and reactions). A partial inline failure is exit 2 but still
+// writes the walkthrough; a walkthrough failure is exit 1.
+func gateAndPost(ctx context.Context, rc *ReviewContext, cfg config.Config, opts Options, kept []diff.FileDiff, plan incremental.Plan, prior []gate.CompactFinding, poster *post.Poster, loc post.Locator) error {
+	idx := fingerprint.NewContentIndex(kept)
+	priorReviewed := plan.PriorForReviewedPaths(prior)
+	res := gate.Route(rc.Findings, idx, priorReviewed, cfg.Review)
+	if !plan.Full {
+		res.AddCarried(plan.Carried)
+		res.AddResolved(plan.AnchorGone)
+		rc.Stats.FindingsCarriedForward = len(plan.Carried)
+	}
 	rc.Gate = &res
 
 	if !opts.Post {
 		return nil
 	}
 
-	newlyResolved := fpsOf(res.Resolved)
-	meta := gate.BuildMeta(rc.HeadSHA, opts.now(), res.ActiveCompact(nil), priorResolved, newlyResolved)
+	anchors := findings.NewAnchors(kept)
+	comments := post.BuildInlineComments(res.Inline, anchors)
+	failed, subErr := poster.SubmitInlineReview(ctx, rc.HeadSHA, comments)
+	if subErr != nil {
+		opts.Log.Error("inline review submission problem", "err", subErr)
+	}
+	rc.Stats.InlinePostFailed = failed
+
+	// Recover comment IDs for the metadata (best-effort; a failure leaves cids
+	// at 0, which the next run's sync/backfill reconciles).
+	cids, cErr := poster.CollectCids(ctx)
+	if cErr != nil {
+		opts.Log.Warn("could not collect comment IDs; metadata cids are 0 this run", "err", cErr)
+	}
+
+	meta := gate.BuildMeta(rc.HeadSHA, opts.now(), res.ActiveCompact(cids), loc.Meta.Resolved, fpsOf(res.Resolved))
 	walkthrough := render.Walkthrough(render.WalkthroughInput{
 		Result:        res,
 		Meta:          meta,
@@ -65,22 +106,9 @@ func gateAndPost(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg 
 		OutputTokens:  rc.Stats.OutputTokens,
 		Version:       version.Version,
 	})
-
-	// Walkthrough first. Its failure is terminal (exit 1) — we do not attempt
-	// the inline review on top of a missing walkthrough.
 	if err := poster.UpsertWalkthrough(ctx, loc, walkthrough); err != nil {
 		return err
 	}
-
-	anchors := findings.NewAnchors(kept)
-	comments := post.BuildInlineComments(res.Inline, anchors)
-	failed, err := poster.SubmitInlineReview(ctx, rc.HeadSHA, comments)
-	if err != nil {
-		// A hard submission error still leaves the walkthrough posted, so it is
-		// a partial (exit 2) outcome, surfaced via the failed count below.
-		opts.Log.Error("inline review submission problem", "err", err)
-	}
-	rc.Stats.InlinePostFailed = failed
 	return nil
 }
 

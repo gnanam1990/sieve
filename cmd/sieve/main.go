@@ -57,6 +57,7 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 		cfgPath  = fs.String("config", config.DefaultFile, "path to config file")
 		dryRun   = fs.Bool("dry-run", false, "fetch + parse + filter, write ReviewContext JSON, no writes")
 		doPost   = fs.Bool("post", false, "post results to the PR (walkthrough + inline review); the ONLY way to enable writes")
+		full     = fs.Bool("full", false, "force a full re-review (disable incremental delta review)")
 		jsonOnly = fs.Bool("json-only", false, "suppress the stderr summary (CI use)")
 		debug    = fs.Bool("debug", false, "debug logging")
 		apiURL   = fs.String("api-url", "", "GitHub API base URL override (testing)")
@@ -107,6 +108,7 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 		ConfigPath: *cfgPath,
 		DryRun:     *dryRun,
 		Post:       *doPost,
+		Full:       *full,
 		APIBaseURL: *apiURL,
 		Log:        logger,
 	})

@@ -284,6 +284,8 @@ func TestMissingKeyWritesStepSummary(t *testing.T) {
 			fmt.Fprint(w, `[]`)
 		case strings.Contains(r.Header.Get("Accept"), "diff"):
 			fmt.Fprint(w, "")
+		case strings.Contains(r.URL.Path, "/issues/") && strings.HasSuffix(r.URL.Path, "/comments"):
+			fmt.Fprint(w, `[]`) // walkthrough locate: none yet
 		default:
 			fmt.Fprint(w, `{"number":1,"title":"T","state":"open","user":{"login":"a"},"base":{"sha":"b"},"head":{"sha":"h"}}`)
 		}

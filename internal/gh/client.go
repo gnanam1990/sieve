@@ -150,6 +150,57 @@ func (c *Client) ListFiles(ctx context.Context, owner, repo string, number int) 
 	}
 }
 
+// CompareResult is the subset of the compare API sieve uses for delta review.
+type CompareResult struct {
+	Status string   // "ahead" | "behind" | "diverged" | "identical"
+	Files  []string // changed file paths across the range
+}
+
+// AheadOnly reports whether head is strictly ahead of base (base is an
+// ancestor) — the only case where a delta re-review is sound. A diverged or
+// behind status (force-push/rebase) requires a full re-review.
+func (c CompareResult) AheadOnly() bool { return c.Status == "ahead" || c.Status == "identical" }
+
+// Compare fetches base...head. found is false on a 404 (the base SHA no longer
+// exists after a force-push), which the caller treats as a full-review
+// fallback. Files are paginated; a range larger than the page cap is reported
+// with a non-ahead status so the caller falls back to a full review rather than
+// under-reviewing.
+func (c *Client) Compare(ctx context.Context, owner, repo, base, head string) (result CompareResult, found bool, err error) {
+	const compareFileCap = 20 // pages of 100
+	for page := 1; page <= compareFileCap; page++ {
+		url := fmt.Sprintf("%s/repos/%s/%s/compare/%s...%s?per_page=100&page=%d", c.BaseURL, owner, repo, base, head, page)
+		var body struct {
+			Status string `json:"status"`
+			Files  []struct {
+				Filename string `json:"filename"`
+			} `json:"files"`
+		}
+		if e := c.getJSON(ctx, url, "application/vnd.github+json", &body); e != nil {
+			if NotFound(e) {
+				return CompareResult{}, false, nil
+			}
+			return CompareResult{}, false, fmt.Errorf("compare %s...%s: %w", base, head, e)
+		}
+		result.Status = body.Status
+		for _, f := range body.Files {
+			result.Files = append(result.Files, f.Filename)
+		}
+		if len(body.Files) < 100 {
+			return result, true, nil
+		}
+	}
+	c.Log.Warn("compare range exceeds page cap; forcing full re-review")
+	result.Status = "diverged"
+	return result, true, nil
+}
+
+// NotFound reports whether err wraps a GitHub 404.
+func NotFound(err error) bool {
+	var ae *apiError
+	return errors.As(err, &ae) && ae.status == http.StatusNotFound
+}
+
 // GetContents fetches a file's content at a ref and base64-decodes it.
 // (Built now, consumed in stage 2.)
 func (c *Client) GetContents(ctx context.Context, owner, repo, path, ref string) ([]byte, error) {
@@ -191,6 +242,38 @@ func (c *Client) ListIssueComments(ctx context.Context, owner, repo string, numb
 		var batch []IssueComment
 		if err := c.getJSON(ctx, url, "application/vnd.github+json", &batch); err != nil {
 			return nil, fmt.Errorf("list issue comments %s/%s#%d page %d: %w", owner, repo, number, page, err)
+		}
+		all = append(all, batch...)
+		if len(batch) < 100 {
+			return all, nil
+		}
+	}
+}
+
+// ReviewComment is one inline review comment on a PR (the pulls/{n}/comments
+// feed). sieve reads these to recover its own comment IDs and reactions.
+type ReviewComment struct {
+	ID        int64  `json:"id"`
+	Body      string `json:"body"`
+	Path      string `json:"path"`
+	InReplyTo int64  `json:"in_reply_to_id"`
+	User      struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	Reactions struct {
+		PlusOne  int `json:"+1"`
+		MinusOne int `json:"-1"`
+	} `json:"reactions"`
+}
+
+// ListReviewComments pages through pulls/{n}/comments at 100/page.
+func (c *Client) ListReviewComments(ctx context.Context, owner, repo string, number int) ([]ReviewComment, error) {
+	var all []ReviewComment
+	for page := 1; ; page++ {
+		url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/comments?per_page=100&page=%d", c.BaseURL, owner, repo, number, page)
+		var batch []ReviewComment
+		if err := c.getJSON(ctx, url, "application/vnd.github+json", &batch); err != nil {
+			return nil, fmt.Errorf("list review comments %s/%s#%d page %d: %w", owner, repo, number, page, err)
 		}
 		all = append(all, batch...)
 		if len(batch) < 100 {

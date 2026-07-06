@@ -48,6 +48,24 @@ func BuildInlineComments(inline []gate.Finding, anchors *findings.Anchors) []Inl
 	return out
 }
 
+// CollectCids lists the PR's inline review comments and maps sieve's own
+// comments (those carrying a fingerprint marker) from fingerprint to comment
+// ID. This recovers cids for the walkthrough metadata without server-side
+// state, and is the basis of sync and reaction fetching.
+func (p *Poster) CollectCids(ctx context.Context) (map[string]int64, error) {
+	comments, err := p.Client.ListReviewComments(ctx, p.Owner, p.Repo, p.PR)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]int64)
+	for _, c := range comments {
+		if fp := render.ParseFpMarker(c.Body); fp != "" {
+			out[fp] = c.ID
+		}
+	}
+	return out, nil
+}
+
 // reviewPayload is the single-submission review body.
 type reviewPayload struct {
 	CommitID string          `json:"commit_id"`
