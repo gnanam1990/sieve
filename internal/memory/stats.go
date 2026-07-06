@@ -36,70 +36,81 @@ type findingAgg struct {
 }
 
 // Aggregate collapses the event log into per-category stats, deduping findings
-// by fingerprint (the latest finding event wins for category/confidence).
+// by fingerprint. Events are processed in append order so a later finding event
+// reactivates a fingerprint that an earlier resolved event may have closed,
+// and a later resolved event closes a fingerprint that an earlier finding
+// opened. This keeps live outcome aggregates consistent with `sieve sync`.
 func Aggregate(events []Event) []CategoryStat {
-	byFp := map[string]*findingAgg{}
-	for _, e := range events {
-		if e.Type != TypeFinding {
-			continue
-		}
-		f := byFp[e.Fp]
-		if f == nil {
-			f = &findingAgg{}
-			byFp[e.Fp] = f
-		}
-		f.cat = e.Cat
-		f.conf = e.Conf
-		if e.Tier == "inline" {
-			f.posted = true
-		}
+	type state struct {
+		cat, tier string
+		conf      float64
+		posted    bool
+		addressed bool
+		dismissed bool
+		plus      int
+		minus     int
 	}
-	addressed := map[string]bool{}
-	plus := map[string]int{}
-	minus := map[string]int{}
-	dismissed := map[string]bool{}
+
+	byFp := map[string]*state{}
 	for _, e := range events {
+		s := byFp[e.Fp]
+		if s == nil {
+			s = &state{}
+			byFp[e.Fp] = s
+		}
+
 		switch e.Type {
+		case TypeFinding:
+			// Latest finding wins for category/confidence/tier.
+			s.cat = e.Cat
+			s.conf = e.Conf
+			s.tier = e.Tier
+			if e.Tier == "inline" {
+				s.posted = true
+			}
+			// A re-posted finding cancels any earlier resolution/dismissal.
+			s.addressed = false
+			s.dismissed = false
 		case TypeResolved:
 			if e.How == ResolvedAnchorGone {
-				addressed[e.Fp] = true
+				s.addressed = true
+				// Addressed (a fix landed) takes precedence over dismissed (thread
+				// closed without a fix).
+				s.dismissed = false
 			}
 		case TypeReaction:
 			// Latest snapshot wins (events are append-ordered), so re-running a
 			// review never double-counts reactions.
-			plus[e.Fp] = e.Plus
-			minus[e.Fp] = e.Minus
+			s.plus = e.Plus
+			s.minus = e.Minus
 		case TypeDismissed:
-			dismissed[e.Fp] = true
+			if !s.addressed {
+				s.dismissed = true
+			}
 		}
 	}
 
 	agg := map[string]*CategoryStat{}
 	confAddr := map[string][]float64{}
 	confIgn := map[string][]float64{}
-	for fp, f := range byFp {
-		if !f.posted {
+	for _, s := range byFp {
+		if !s.posted {
 			continue
 		}
-		c := agg[f.cat]
+		c := agg[s.cat]
 		if c == nil {
-			c = &CategoryStat{Category: f.cat}
-			agg[f.cat] = c
+			c = &CategoryStat{Category: s.cat}
+			agg[s.cat] = c
 		}
 		c.Posted++
-		c.PlusOne += plus[fp]
-		c.MinusOne += minus[fp]
-		// Addressed (a fix landed) takes precedence over dismissed (thread
-		// closed without a fix): a finding later fixed was addressed, not
-		// dismissed. Keeping them mutually exclusive both avoids double-counting
-		// and lets `sieve sync` — which sees only the current fixed state —
-		// reconstruct the same numbers.
-		if addressed[fp] {
+		c.PlusOne += s.plus
+		c.MinusOne += s.minus
+		if s.addressed {
 			c.AddressedByAnchor++
-			confAddr[f.cat] = append(confAddr[f.cat], f.conf)
+			confAddr[s.cat] = append(confAddr[s.cat], s.conf)
 		} else {
-			confIgn[f.cat] = append(confIgn[f.cat], f.conf)
-			if dismissed[fp] {
+			confIgn[s.cat] = append(confIgn[s.cat], s.conf)
+			if s.dismissed {
 				c.Dismissed++
 			}
 		}

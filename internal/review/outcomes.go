@@ -62,6 +62,17 @@ func recordOutcomes(store *memory.Store, rc *ReviewContext, res gate.GateResult,
 		})
 	}
 
+	// Any sieve inline comment that is not part of the current run is treated as
+	// resolved-by-anchor-gone. This keeps live outcome aggregates consistent with
+	// `sieve sync`, which reconstructs from every visible GitHub comment.
+	for _, c := range comments {
+		fp := render.ParseFpMarker(c.Body)
+		if fp == "" || c.ID == 0 || active[fp] {
+			continue
+		}
+		events = append(events, memory.Event{Ts: ts, Type: memory.TypeResolved, Fp: fp, Path: c.Path, How: memory.ResolvedAnchorGone})
+	}
+
 	// Dismissals — a resolved thread whose finding is still active means the
 	// human closed it without a fix (the anchor content is unchanged).
 	for _, th := range threads {
