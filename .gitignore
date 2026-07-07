@@ -14,3 +14,8 @@ coverage.tmp.out
 .env.*
 *.pem
 *.key
+
+# local session artifacts
+/.claude/
+/sandbox_recall*.log
+/EOF

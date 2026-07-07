@@ -380,3 +380,110 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("condition not met within timeout")
 }
+
+// TestAdminEndpoint validates the /admin HTTP endpoint over a real listener:
+// 401 without or with bad auth, and 200 with correct basic auth returning
+// runtime stats. This is the live-validation proxy for environments that do not
+// have a real GitHub App PEM in the worktree: we generate a throwaway key and
+// start a real listener.
+func TestAdminEndpoint(t *testing.T) {
+	t.Setenv("SIEVE_TEST_WH_SECRET", "whsecret")
+	t.Setenv("SIEVE_TEST_ADMIN_SECRET", "adminpass")
+	diff, _ := readDiff()
+	hub := &fakeHub{t: t, diff: diff}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	// Re-create the server with admin_secret_env wired. buildServer does not set
+	// admin_secret_env, so we patch the config and build a new Server directly.
+	scYAML := fmt.Sprintf(`app: {id: 999, private_key_path: %s}
+webhook_secret_env: SIEVE_TEST_WH_SECRET
+admin_secret_env: SIEVE_TEST_ADMIN_SECRET
+data_dir: %s
+workers: 1
+review: {pipeline: single, roles: {reviewer: default}, min_confidence: 0.1}
+providers: {default: {type: fake, fixture: %q}}
+`, writeKey(t, 0o600), t.TempDir(), func() string {
+		fixture, _ := filepath.Abs("testdata/findings.json")
+		return fixture
+	}())
+	sc, err := LoadConfigFromBytes([]byte(scYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sAdmin, err := New(sc, Options{APIBaseURL: hub.server().URL, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sAdmin.sc.Listen = addr
+	sAdmin.httpSrv.Addr = addr
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- sAdmin.Serve(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	waitFor(t, func() bool {
+		resp, err := http.Get("http://" + addr + "/healthz")
+		if err == nil {
+			resp.Body.Close() //nolint:errcheck
+			return resp.StatusCode == http.StatusOK
+		}
+		return false
+	})
+
+	baseURL := "http://" + addr + "/admin"
+
+	// No admin secret configured is not the case here, but we test 401 paths.
+	resp, err := http.Get(baseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("/admin without auth want 401, got %d", resp.StatusCode)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, baseURL, nil)
+	req.SetBasicAuth("admin", "wrong")
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close() //nolint:errcheck
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("/admin with wrong pass want 401, got %d", resp2.StatusCode)
+	}
+
+	req3, _ := http.NewRequest(http.MethodGet, baseURL, nil)
+	req3.SetBasicAuth("admin", "adminpass")
+	resp3, err := http.DefaultClient.Do(req3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp3.Body.Close() //nolint:errcheck
+	if resp3.StatusCode != http.StatusOK {
+		t.Fatalf("/admin with correct pass want 200, got %d", resp3.StatusCode)
+	}
+	var admin map[string]any
+	if err := json.NewDecoder(resp3.Body).Decode(&admin); err != nil {
+		t.Fatal(err)
+	}
+	if admin["version"] == "" {
+		t.Fatalf("missing version in /admin: %v", admin)
+	}
+	if _, ok := admin["uptime_seconds"]; !ok {
+		t.Fatalf("missing uptime_seconds in /admin: %v", admin)
+	}
+	if _, ok := admin["running"]; !ok {
+		t.Fatalf("missing running in /admin: %v", admin)
+	}
+}
