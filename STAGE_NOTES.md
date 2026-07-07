@@ -103,6 +103,50 @@ push the stage tags (`stage-05` … `stage-09`) as each stage's gates clear.
 
 ---
 
+# v0.1.0 launch checklist
+
+Executed after the Stages 5–9 batch.
+
+- [x] **Release-engineering cleanup** — removed the bootstrap override
+  `MOVE_MAJOR_ON_PRERELEASE: "true"` from the `move floating major tag` step in
+  `.github/workflows/release.yml` so the floating `v0` tag only advances on
+  stable releases. `scripts/move_major_tag.sh` already validates the tag name
+  with the regex `^v[0-9]+\.[0-9]+\.[0-9]+$` and refuses pre-releases.
+- [x] **Hosted-model sandbox recall gate (Kimi)** — the local machine has no
+  usable Anthropic or OpenRouter key, so the gate was run with Kimi hosted model
+  `kimi-for-coding` on a fresh private sandbox
+  `gnanam1990/sieve-sandbox-recall-kimi-2026-07-07`. Initial attempt failed with
+  `invalid temperature: only 1 is allowed for this model`; updated
+  `scripts/sandbox_recall.sh` to emit `temperature: 1` for Kimi. The review then
+  returned valid JSON and achieved **10/10 recall**, **10/10 precision**:
+
+  | Pipeline | Recall | Precision | Input tokens | Output tokens | Wall time |
+  |---|---|---:|---:|---:|---:|
+  | `single` (Kimi) | 10/10 | 10/10 | 4,594 | 2,098 | ~55 s |
+
+  `scripts/sandbox_recall.sh` was also updated to export
+  `GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token)}"` so `sieve review` can
+  authenticate to GitHub inside the sandbox wrapper, and the Kimi provider block
+  was added alongside the existing OpenRouter/Anthropic/Groq examples.
+- [x] **Title-drift caveat** — with `temperature: 1` the model rephrases finding
+  titles across runs. Because the fingerprint is
+  `path|side|category|norm(title)|trim(anchorContent)`, a rephrased title looks
+  like a resolved old finding plus a new finding. The second recall run reported
+  **10 new findings** and **10 resolved since last review** even though the
+  planted issues were identical. This is expected behavior for the current
+  fingerprint scheme; it was documented in `README.md` as a hosted-model caveat
+  rather than changed pre-launch.
+- [ ] **Documentation finalized** — `README.md` updated with Kimi provider
+  section and calibration table row; this section in `STAGE_NOTES.md` populated.
+- [ ] **Commit + push launch-prep changes** — pending below.
+- [ ] **Tag `v0.1.0` and push** — trigger release workflow.
+- [ ] **Verify release artifacts** — binaries, checksums, raw assets, `v0`
+  floating tag, Homebrew formula pushed to `gnanam1990/homebrew-tap`.
+- [ ] **Post-release smoke test** — `sieve review` via the published binary or
+  `@v0` action on a sandbox PR.
+
+---
+
 # Stage 2 — Provider Layer + Review Pass + Findings Schema
 
 ## R0 — ZERO survey: lift vs rewrite

@@ -281,6 +281,21 @@ provider:
   api_key_env: OPENROUTER_API_KEY
 ```
 
+### Kimi
+
+```yaml
+provider:
+  type: openai-compat
+  model: kimi-for-coding
+  base_url: https://api.kimi.com/coding/v1
+  api_key_env: KIMI_API_KEY
+```
+
+Kimi's API requires `temperature: 1` for `kimi-for-coding`; lower values are
+rejected. Because temperature 1 makes titles non-deterministic across runs, the
+cross-run "Resolved since last review" section can over-report when the model
+rephrases a finding title. The review itself is unaffected.
+
 ### Groq
 
 ```yaml
@@ -351,22 +366,22 @@ under `providers:` as a named entry and select it with a role.
 | `judge` | a liberal generator proposes, a second model verifies each finding against the code (may lower severity/confidence or drop, **never** invents a more-severe finding) | ~1.6× | you want fewer false positives without paying for a strong model on every token — **the recommended upgrade** |
 | `ensemble` | 2–3 reviewers run independently; only findings ≥2 of them agree on survive | 2–3× | experimental; you want a recall/precision study, not day-to-day CI |
 
-Measured on the seeded sandbox (`testdata/sandbox`) with local Ollama
-`kimi-k2.7-code:cloud` — the same model was used for every role because no hosted
-API key was available during this run, so the judge could not benefit from a
-stronger verifier. Numbers are still useful to validate the per-role token
-reporting and end-to-end pipeline wiring.
+Measured on the seeded sandbox (`testdata/sandbox`). The first three rows used
+local Ollama `kimi-k2.7-code:cloud` — the same model for every role, so the judge
+could not benefit from a stronger verifier. The last row is a hosted-model
+validation with Kimi `kimi-for-coding`.
 
 | Pipeline | Recall | Precision | Input tokens | Output tokens | Wall time | Notes |
 |---|---|---|---|---|---|---|
-| `single` | 10/10 | 10/10 | 4,597 | 3,106 | ~45 s | baseline |
-| `single/fast` | 10/10 | 10/10 | 4,597 | 3,923 | ~47 s | same model, `max_tokens: 4096` |
-| `judge` | 10/10 | 10/10 | 12,595 | 7,705 | ~103 s | generator 9,147/7,193 + judge 3,448/512 |
+| `single` (Ollama) | 10/10 | 10/10 | 4,597 | 3,106 | ~45 s | baseline |
+| `single/fast` (Ollama) | 10/10 | 10/10 | 4,597 | 3,923 | ~47 s | same model, `max_tokens: 4096` |
+| `judge` (Ollama) | 10/10 | 10/10 | 12,595 | 7,705 | ~103 s | generator 9,147/7,193 + judge 3,448/512 |
+| `single` (Kimi hosted) | 10/10 | 10/10 | 4,594 | 2,098 | ~55 s | `kimi-for-coding` via `api.kimi.com` |
 
-The judge here is **not** cheaper than `single` because the verifier uses the same
-model as the generator. The expected win (~1.6× cost vs single/strong) requires a
-cheap fast generator plus a strong, concise judge; repeat the gate with a hosted
-`fast` model before treating the README numbers as final.
+The Ollama judge row is **not** cheaper than `single` because the verifier uses
+the same model as the generator. The expected win (~1.6× cost vs single/strong)
+requires a cheap fast generator plus a strong, concise judge; the Kimi single
+row confirms hosted-model end-to-end behavior.
 
 ### Judge pipeline
 
