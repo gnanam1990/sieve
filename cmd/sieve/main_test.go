@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -466,4 +469,264 @@ func TestReviewErrorExitCode(t *testing.T) {
 	if code != exitError {
 		t.Fatalf("exit %d, want %d", code, exitError)
 	}
+}
+
+// initGitRepo creates a temp git repo with a commit on main. The caller can
+// then create a branch and commit changes for --local review tests.
+func initGitRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	cmd := exec.Command("git", "init")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	for _, args := range [][]string{
+		{"config", "user.email", "local@example.com"},
+		{"config", "user.name", "Local User"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	return dir
+}
+
+func writeRepoFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// localFakeFixture returns a fake-provider config whose fixture yields one
+// finding at the given line in service.go.
+func localFakeFixture(t *testing.T, line int) string {
+	t.Helper()
+	findingsJSON := fmt.Sprintf(`{"findings":[{"Path":"service.go","Line":%d,"Side":"RIGHT","Severity":"critical","Confidence":0.95,"Category":"bug","Title":"Nil pointer dereference","Body":"Dereferencing x without checking for nil."}]}`, line)
+	return writeFixtureString(t, findingsJSON)
+}
+
+func writeFixtureString(t *testing.T, findingsJSON string) string {
+	t.Helper()
+	dir := t.TempDir()
+	fixture := filepath.Join(dir, "findings.json")
+	if err := os.WriteFile(fixture, []byte(findingsJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(dir, ".sieve.yml")
+	if err := os.WriteFile(cfg, []byte(fmt.Sprintf("provider:\n  type: fake\n  fixture: %q\n", fixture)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+func localLineOf(t *testing.T, diffData []byte) int {
+	t.Helper()
+	// Crude scan: the added line starts with '+', and we want its new line
+	// number. For the simple service.go diff, the '+var x *int' line is the
+	// first added line. We re-parse to be robust.
+	var line int
+	scan := bufio.NewScanner(bytes.NewReader(diffData))
+	newLine := 0
+	inHunk := false
+	for scan.Scan() {
+		l := scan.Text()
+		if strings.HasPrefix(l, "@@") {
+			inHunk = true
+			// Parse @@ -oldStart,oldLen +newStart,newLen @@
+			if _, n, ok := parseHunkHeader(l); ok {
+				newLine = n
+			}
+			continue
+		}
+		if !inHunk {
+			continue
+		}
+		if len(l) == 0 {
+			continue
+		}
+		switch l[0] {
+		case '+':
+			if line == 0 && !strings.HasPrefix(l, "+++") {
+				line = newLine
+			}
+			newLine++
+		case ' ', '\n':
+			newLine++
+		case '-':
+			// removed line does not advance newLine
+		}
+	}
+	if line == 0 {
+		t.Fatal("could not find added line in local diff")
+	}
+	return line
+}
+
+func parseHunkHeader(line string) (oldStart, newStart int, ok bool) {
+	// Format: @@ -<oldStart>,<oldLen> +<newStart>,<newLen> @@
+	parts := strings.Split(line, " ")
+	if len(parts) < 3 {
+		return 0, 0, false
+	}
+	newPart := strings.TrimPrefix(parts[2], "+")
+	if j := strings.Index(newPart, ","); j >= 0 {
+		newPart = newPart[:j]
+	}
+	n, err := strconv.Atoi(newPart)
+	if err != nil {
+		return 0, 0, false
+	}
+	return 0, n, true
+}
+
+// TestReviewLocalDryRun verifies --local can assemble the stage-1 context
+// without a GitHub token or PR number.
+func TestReviewLocalDryRun(t *testing.T) {
+	dir := initGitRepo(t)
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	writeRepoFile(t, dir, "main.go", "package main\n")
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "base")
+
+	runGit(t, dir, "checkout", "-b", "feat")
+	writeRepoFile(t, dir, "main.go", "package main\n\nfunc main() {}\n")
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "change")
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"review", "--local", "--base", "main", "--config", t.TempDir() + "/.sieve.yml", "--dry-run"}, &out, &errOut)
+	if code != exitOK {
+		t.Fatalf("exit %d, want 0; stderr:\n%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"PRNumber": 0`) {
+		t.Fatalf("stdout missing local PR marker:\n%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "files total") {
+		t.Fatalf("stderr missing summary:\n%s", errOut.String())
+	}
+}
+
+// TestReviewLocalFullReview runs the LLM path against a local git worktree
+// using the fake provider and no GitHub token.
+func TestReviewLocalFullReview(t *testing.T) {
+	dir := initGitRepo(t)
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	writeRepoFile(t, dir, "service.go", "package service\n\nfunc Run() {\n\tprintln(\"ok\")\n}\n")
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "base")
+
+	runGit(t, dir, "checkout", "-b", "feat")
+	writeRepoFile(t, dir, "service.go", "package service\n\nfunc Run() {\n\tvar x *int\n\tprintln(*x)\n}\n")
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "bug")
+
+	diffBytes, err := gitDiffLocal(dir, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := localLineOf(t, diffBytes)
+	cfg := localFakeFixture(t, line)
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"review", "--local", "--base", "main", "--config", cfg}, &out, &errOut)
+	if code != exitOK {
+		t.Fatalf("exit %d, want 0; stderr:\n%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"Path": "service.go"`) {
+		t.Fatalf("stdout missing finding:\n%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "Nil pointer dereference") {
+		t.Fatalf("stderr missing finding title:\n%s", errOut.String())
+	}
+}
+
+// TestReviewLocalPostRejected proves --local and --post are mutually exclusive.
+func TestReviewLocalPostRejected(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"review", "--local", "--post"}, &out, &errOut)
+	if code != exitError {
+		t.Fatalf("exit %d, want %d", code, exitError)
+	}
+	if !strings.Contains(errOut.String(), "mutually exclusive") {
+		t.Fatalf("expected mutual-exclusion error:\n%s", errOut.String())
+	}
+}
+
+// TestReviewLocalSarif verifies SARIF output works in local mode.
+func TestReviewLocalSarif(t *testing.T) {
+	dir := initGitRepo(t)
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	writeRepoFile(t, dir, "service.go", "package service\n\nfunc Run() {\n\tprintln(\"ok\")\n}\n")
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "base")
+
+	runGit(t, dir, "checkout", "-b", "feat")
+	writeRepoFile(t, dir, "service.go", "package service\n\nfunc Run() {\n\tvar x *int\n\tprintln(*x)\n}\n")
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "bug")
+
+	diffBytes, err := gitDiffLocal(dir, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := localLineOf(t, diffBytes)
+	cfg := localFakeFixture(t, line)
+	sarifPath := filepath.Join(t.TempDir(), "sieve.sarif")
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"review", "--local", "--base", "main", "--config", cfg, "--sarif", sarifPath}, &out, &errOut)
+	if code != exitOK {
+		t.Fatalf("exit %d, want 0; stderr:\n%s", code, errOut.String())
+	}
+	data, err := os.ReadFile(sarifPath) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatalf("sarif file not created: %v", err)
+	}
+	if !strings.Contains(string(data), `"version": "2.1.0"`) {
+		t.Fatalf("sarif missing version marker:\n%s", string(data))
+	}
+}
+
+func gitDiffLocal(dir, base string) ([]byte, error) {
+	cmd := exec.Command("git", "diff", "--no-color", base+"...HEAD")
+	cmd.Dir = dir
+	return cmd.Output()
 }

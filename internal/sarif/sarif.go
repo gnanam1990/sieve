@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/gnanam1990/sieve/internal/gate"
@@ -126,6 +127,7 @@ func FromGate(g *gate.GateResult, opts Options) Report {
 	for _, r := range ruleIDs {
 		rules = append(rules, r)
 	}
+	sort.Slice(rules, func(i, j int) bool { return rules[i].ID < rules[j].ID })
 
 	artifacts := collectArtifacts(results)
 

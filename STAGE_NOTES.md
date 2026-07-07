@@ -1088,3 +1088,22 @@ fingerprint. This needs:
 
 This is Stage 11. Stage 10 is declared complete once the v0.2.1 release items
 above are in `main` and the smoke test is green.
+
+---
+
+# Offline-first local review
+
+Added `sieve review --local` so the CLI can review a local git worktree without
+a GitHub token, App PEM, or webhook.
+
+- [x] **Local diff/source package** — `internal/local` shells out to git to
+  produce `PullRequest`, diff bytes, and a `PRFile` listing from the worktree.
+- [x] **CLI `--local` and `--base`** — `sieve review --local --base main` runs
+  the full pipeline against `git diff main...HEAD`. `--repo` is inferred from
+  `origin` or the directory name. `--post` is rejected in local mode.
+- [x] **Review pipeline branches** — `review.build` uses the local source when
+  `opts.Local` is set; file-content attachment and learnings loading read from
+  disk instead of the GitHub contents API.
+- [x] **Tests** — unit tests for `internal/local`, integration tests in
+  `internal/review`, and CLI tests in `cmd/sieve` all use real temp git repos.
+- [x] **Docs** — README and `docs/self-hosting.md` describe the local workflow.

@@ -116,6 +116,23 @@ sieve review --repo owner/name --pr 123 --post   # …and post to the PR
 codes: `0` ok · `2` partial (truncated context, a failed batch, or a failed
 inline post) · `1` error.
 
+### Offline / local review
+
+Review a local git worktree without a GitHub token or App PEM. sieve reads
+`git diff <base>...HEAD`, builds the same ReviewContext, and runs the same
+pipeline. `--post` is not allowed because there is no PR; SARIF and JSON output
+work normally.
+
+```sh
+# on a feature branch, base is origin/main or main
+sieve review --local --base main
+sieve review --local --base main --sarif sieve.sarif
+```
+
+When `--repo` is omitted, the repo name is inferred from `origin` or the
+directory name (used only for summary/SARIF output). `--local` still requires a
+model key unless you use `provider: fake` or `--dry-run`.
+
 ### SARIF output (GitHub Security tab)
 
 `sieve review --sarif sieve.sarif` writes findings in

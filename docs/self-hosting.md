@@ -289,6 +289,20 @@ format — no client library is required.
   - A single node with `workers: 2–4` is expected to handle many repos; the
     bottleneck is model latency, not CPU.
 
+## Local CLI review (no daemon)
+
+The daemon mode above requires a GitHub App and webhooks. For one-off local
+review of a branch before opening a PR, use the CLI's `--local` flag instead:
+
+```sh
+sieve review --local --base main
+```
+
+This reads `git diff main...HEAD` from the current worktree, runs the same
+review pipeline, and emits JSON/SARIF to stdout. No GitHub token or App PEM is
+required; `--post` is not allowed because there is no PR. Model keys are still
+required unless you use `--dry-run` or `provider: fake`.
+
 ## Non-goals
 
 No in-process TLS (that's the proxy's job), no multi-tenancy/billing, no web UI,

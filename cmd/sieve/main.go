@@ -19,6 +19,7 @@ import (
 
 	"github.com/gnanam1990/sieve/internal/config"
 	"github.com/gnanam1990/sieve/internal/gh"
+	"github.com/gnanam1990/sieve/internal/local"
 	"github.com/gnanam1990/sieve/internal/memory"
 	"github.com/gnanam1990/sieve/internal/review"
 	"github.com/gnanam1990/sieve/internal/sarif"
@@ -72,23 +73,29 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("review", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
-		repo     = fs.String("repo", "", "repository as owner/name (default: $GITHUB_REPOSITORY)")
-		pr       = fs.Int("pr", 0, "pull request number (default: from $GITHUB_EVENT_PATH)")
-		token    = fs.String("token", "", "GitHub token (default: $GITHUB_TOKEN)")
-		cfgPath  = fs.String("config", config.DefaultFile, "path to config file")
-		dryRun   = fs.Bool("dry-run", false, "fetch + parse + filter, write ReviewContext JSON, no writes")
-		doPost   = fs.Bool("post", false, "post results to the PR (walkthrough + inline review); the ONLY way to enable writes")
-		full     = fs.Bool("full", false, "force a full re-review (disable incremental delta review)")
-		jsonOnly = fs.Bool("json-only", false, "suppress the stderr summary (CI use)")
-		debug    = fs.Bool("debug", false, "debug logging")
-		apiURL   = fs.String("api-url", "", "GitHub API base URL override (testing)")
-		sarifOut = fs.String("sarif", "", "write a SARIF v2.1.0 report to this file for github/codeql-action/upload-sarif")
+		repo      = fs.String("repo", "", "repository as owner/name (default: $GITHUB_REPOSITORY)")
+		pr        = fs.Int("pr", 0, "pull request number (default: from $GITHUB_EVENT_PATH)")
+		token     = fs.String("token", "", "GitHub token (default: $GITHUB_TOKEN)")
+		cfgPath   = fs.String("config", config.DefaultFile, "path to config file")
+		dryRun    = fs.Bool("dry-run", false, "fetch + parse + filter, write ReviewContext JSON, no writes")
+		doPost    = fs.Bool("post", false, "post results to the PR (walkthrough + inline review); the ONLY way to enable writes")
+		full      = fs.Bool("full", false, "force a full re-review (disable incremental delta review)")
+		jsonOnly  = fs.Bool("json-only", false, "suppress the stderr summary (CI use)")
+		debug     = fs.Bool("debug", false, "debug logging")
+		apiURL    = fs.String("api-url", "", "GitHub API base URL override (testing)")
+		sarifOut  = fs.String("sarif", "", "write a SARIF v2.1.0 report to this file for github/codeql-action/upload-sarif")
+		localMode = fs.Bool("local", false, "review the local git worktree against --base (no GitHub token needed)")
+		baseRef   = fs.String("base", "main", "base ref for --local review (default: main)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return exitError
 	}
 	if *dryRun && *doPost {
 		fmt.Fprintln(stderr, "error: --dry-run and --post are mutually exclusive")
+		return exitError
+	}
+	if *localMode && *doPost {
+		fmt.Fprintln(stderr, "error: --local and --post are mutually exclusive")
 		return exitError
 	}
 
@@ -109,24 +116,31 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	if *repo == "" {
-		*repo = gh.RepoFromEnv()
-	}
-	if *pr == 0 {
-		*pr = gh.PRNumberFromEnv()
-	}
-	if *token == "" {
-		*token = os.Getenv("GITHUB_TOKEN")
-	}
-	if *repo == "" || *pr == 0 {
-		fmt.Fprintln(stderr, "error: --repo and --pr are required (or GITHUB_REPOSITORY / GITHUB_EVENT_PATH in Actions)")
-		return exitError
-	}
-
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = "."
 	}
+
+	if *localMode {
+		if *repo == "" {
+			*repo = local.RepoName(cwd)
+		}
+	} else {
+		if *repo == "" {
+			*repo = gh.RepoFromEnv()
+		}
+		if *pr == 0 {
+			*pr = gh.PRNumberFromEnv()
+		}
+		if *token == "" {
+			*token = os.Getenv("GITHUB_TOKEN")
+		}
+		if *repo == "" || *pr == 0 {
+			fmt.Fprintln(stderr, "error: --repo and --pr are required (or GITHUB_REPOSITORY / GITHUB_EVENT_PATH in Actions)")
+			return exitError
+		}
+	}
+
 	rc, err := review.Run(context.Background(), review.Options{
 		Repo:       *repo,
 		PRNumber:   *pr,
@@ -138,6 +152,8 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 		APIBaseURL: *apiURL,
 		Log:        logger,
 		RepoPath:   cwd,
+		Local:      *localMode,
+		BaseRef:    *baseRef,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, "error:", err)
@@ -461,6 +477,7 @@ usage:
   sieve review --repo owner/name --pr N             LLM review, findings on stdout (read-only)
   sieve review --repo owner/name --pr N --post      review AND post the results to the PR
   sieve review --repo owner/name --pr N --dry-run   context dump only, no LLM calls
+  sieve review --local [--base main]                 review the local git worktree without GitHub
   sieve sync --repo owner/name --pr N               rebuild the local outcome store from GitHub
   sieve learnings --repo owner/name                 draft repo rules from outcomes -> .sieve/learnings.md
   sieve stats --repo owner/name [--json]            per-category addressed-rate + reactions
@@ -469,13 +486,15 @@ usage:
   sieve version                                     print version
 
 review flags:
-  --repo       repository as owner/name (default: $GITHUB_REPOSITORY)
+  --repo       repository as owner/name (default: $GITHUB_REPOSITORY; --local infers from remote)
   --pr         pull request number (default: pull_request.number from $GITHUB_EVENT_PATH)
   --token      GitHub token (default: $GITHUB_TOKEN)
   --config     config file (default: .sieve.yml)
   --dry-run    skip the LLM pass; no GitHub writes ever happen either way
   --post       post the walkthrough + inline review to the PR — the ONLY switch
                that enables writes; no config key can turn posting on
+  --local      review the current git worktree against --base; no token or PR needed
+  --base       base ref for --local review (default: main)
   --full       force a full re-review (disable incremental delta review)
   --json-only  suppress the stderr summary
   --sarif      write a SARIF v2.1.0 report to this file for GitHub Security tab upload

@@ -19,6 +19,7 @@ import (
 	"github.com/gnanam1990/sieve/internal/findings"
 	"github.com/gnanam1990/sieve/internal/gate"
 	"github.com/gnanam1990/sieve/internal/gh"
+	"github.com/gnanam1990/sieve/internal/local"
 	"github.com/gnanam1990/sieve/internal/prompt"
 )
 
@@ -149,6 +150,12 @@ type Options struct {
 	// those depths fall back to symbols-only context from the changed files.
 	RepoPath string
 
+	// Local runs the review against a local git worktree instead of GitHub.
+	// Diff, file listing, and metadata come from `git diff <BaseRef>...HEAD`;
+	// no token or App PEM is required. Posting is disabled.
+	Local   bool
+	BaseRef string // base ref for local diff; default "main"
+
 	// Daemon-mode injection (stage 7). When set, TokenSource replaces the
 	// StaticTokenSource built from Token — App installation auth drops in exactly
 	// where a static token would. When set, Config replaces loading ConfigPath —
@@ -270,6 +277,10 @@ func Build(ctx context.Context, opts Options) (*ReviewContext, error) {
 }
 
 func build(ctx context.Context, opts Options, cfg config.Config) (*ReviewContext, *gh.Client, error) {
+	if opts.Local {
+		return buildLocal(ctx, opts, cfg)
+	}
+
 	owner, name, ok := strings.Cut(opts.Repo, "/")
 	if !ok || owner == "" || name == "" {
 		return nil, nil, fmt.Errorf("invalid --repo %q, want owner/name", opts.Repo)
@@ -296,6 +307,35 @@ func build(ctx context.Context, opts Options, cfg config.Config) (*ReviewContext
 		return nil, nil, err
 	}
 
+	return assembleContext(opts, cfg, pr, diffData, diffTruncated, listing, listTruncated, client)
+}
+
+func buildLocal(ctx context.Context, opts Options, cfg config.Config) (*ReviewContext, *gh.Client, error) {
+	repoPath := opts.RepoPath
+	if repoPath == "" {
+		repoPath = "."
+	}
+	base := opts.BaseRef
+	if base == "" {
+		base = "main"
+	}
+
+	pr, err := local.PullRequest(ctx, repoPath, base)
+	if err != nil {
+		return nil, nil, err
+	}
+	diffData, diffTruncated, err := local.Diff(ctx, repoPath, base)
+	if err != nil {
+		return nil, nil, err
+	}
+	listing, listTruncated, err := local.ListFiles(ctx, repoPath, base)
+	if err != nil {
+		return nil, nil, err
+	}
+	return assembleContext(opts, cfg, pr, diffData, diffTruncated, listing, listTruncated, nil)
+}
+
+func assembleContext(opts Options, cfg config.Config, pr *gh.PullRequest, diffData []byte, diffTruncated bool, listing []gh.PRFile, listTruncated bool, client *gh.Client) (*ReviewContext, *gh.Client, error) {
 	files, err := diff.Parse(diffData)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse diff: %w", err)

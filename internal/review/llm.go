@@ -15,6 +15,7 @@ import (
 	"github.com/gnanam1990/sieve/internal/gh"
 	"github.com/gnanam1990/sieve/internal/incremental"
 	"github.com/gnanam1990/sieve/internal/learnings"
+	"github.com/gnanam1990/sieve/internal/local"
 	"github.com/gnanam1990/sieve/internal/prompt"
 	"github.com/gnanam1990/sieve/internal/provider"
 	"github.com/gnanam1990/sieve/internal/provider/anthropic"
@@ -236,7 +237,7 @@ func buildPromptInput(ctx context.Context, rc *ReviewContext, client *gh.Client,
 		sent = append(sent, fe.FileDiff)
 		f := prompt.File{Path: path, Status: fe.Status.String(), Diff: fe.FileDiff}
 		if cfg.Review.IncludeFileContent && fe.Status != diff.Deleted {
-			content, err := client.GetContents(ctx, owner, name, path, rc.HeadSHA)
+			content, err := readContent(ctx, opts, client, owner, name, path, rc.HeadSHA)
 			switch {
 			case err != nil:
 				opts.Log.Debug("skipping content attachment", "path", path, "err", err)
@@ -256,12 +257,27 @@ func buildPromptInput(ctx context.Context, rc *ReviewContext, client *gh.Client,
 	return in, sent
 }
 
+// readContent fetches a file's current content from GitHub or from disk in
+// local mode. It is the single place buildPromptInput resolves content.
+func readContent(ctx context.Context, opts Options, client *gh.Client, owner, name, path, ref string) ([]byte, error) {
+	if opts.Local {
+		return local.ReadFile(opts.RepoPath, path)
+	}
+	return client.GetContents(ctx, owner, name, path, ref)
+}
+
 // fetchLearnings loads .sieve/learnings.md at the PR head and returns the
 // injection text (capped at 8 KB) and the active-rule count. Absent or
 // unreadable learnings are simply skipped.
 func fetchLearnings(ctx context.Context, client *gh.Client, rc *ReviewContext, opts Options) (string, int) {
 	owner, name, _ := strings.Cut(rc.Repo, "/")
-	content, err := client.GetContents(ctx, owner, name, ".sieve/learnings.md", rc.HeadSHA)
+	var content []byte
+	var err error
+	if opts.Local {
+		content, err = local.ReadFile(opts.RepoPath, ".sieve/learnings.md")
+	} else {
+		content, err = client.GetContents(ctx, owner, name, ".sieve/learnings.md", rc.HeadSHA)
+	}
 	if err != nil {
 		return "", 0 // no learnings file (common); not an error
 	}
