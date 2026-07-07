@@ -95,7 +95,8 @@ runs:
 
         echo "downloading ${asset} @ ${VERSION} from ${repo}"
         gh release download "${VERSION}" --repo "${repo}" \
-          --pattern "${asset}" --pattern "checksums.txt" --dir "${tmp}"
+          --pattern "${asset}" --pattern "checksums.txt" \
+          --pattern "${asset}.sig" --pattern "${asset}.cert" --dir "${tmp}"
 
         # Verify sha256 against checksums.txt; a mismatch is a hard fail.
         # `|| true` keeps a no-match from aborting (set -e/pipefail) before the
@@ -113,6 +114,21 @@ runs:
           echo "::error::checksum mismatch for ${asset}: expected ${want}, got ${got}"; exit 1
         fi
         echo "checksum ok: ${asset}"
+
+        # Verify keyless cosign signature if a .sig/.cert pair is present.
+        if [ -f "${tmp}/${asset}.sig" ] && [ -f "${tmp}/${asset}.cert" ]; then
+          if command -v cosign >/dev/null 2>&1; then
+            cosign verify-blob \
+              --signature "${tmp}/${asset}.sig" \
+              --certificate "${tmp}/${asset}.cert" \
+              --certificate-identity-regexp '^https://github.com/gnanam1990/sieve/.github/workflows/release.yml@refs/tags/v[0-9]+' \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              "${tmp}/${asset}" 2>&1
+            echo "cosign signature ok: ${asset}"
+          else
+            echo "::warning::cosign not installed; skipping signature verification for ${asset}"
+          fi
+        fi
 
         install -m 0755 "${tmp}/${asset}" "${tmp}/sieve"
         echo "bindir=${tmp}" >> "$GITHUB_OUTPUT"

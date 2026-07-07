@@ -45,11 +45,23 @@ checksum:
   name_template: "checksums.txt"
   algorithm: sha256
 
-# TODO(backlog): cosign / sigstore signing of checksums.txt and binaries.
-# Deliberately not done in stage 4 (see NON-GOALS); tracked for a later stage.
-# signs:
-#   - cmd: cosign
-#     ...
+# Keyless cosign signing via GitHub Actions OIDC. Each artifact gets a .sig and
+# .cert file; users verify with `cosign verify-blob --signature ... --cert ...`.
+# Certificate identity and issuer are pinned to this workflow.
+signs:
+  - cmd: cosign
+    env:
+      - COSIGN_EXPERIMENTAL=1
+    certificate: '${artifact}.cert'
+    signature: '${artifact}.sig'
+    artifacts: all
+    output: true
+    args:
+      - sign-blob
+      - --output-signature=${signature}
+      - --output-certificate=${certificate}
+      - ${artifact}
+      - --yes
 
 changelog:
   use: github
