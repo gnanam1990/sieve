@@ -452,36 +452,55 @@ R4–R5, render R5–R6, post/orchestration R6–R7, completeness) with per-find
 skeptic verification. 168 code reads across the six reviewers; **zero
 confirmed defects or spec violations**.
 
-## Gate 4 — Seeded sandbox recall (calibration) — PENDING LIVE RUN
+## Gate 4 — Seeded sandbox recall (calibration) — COMPLETED 2026-07-07
 
-This gate requires a frontier-model API key and creates a live private repo, so
-it is **not runnable in the offline build**. Everything needed is committed:
+Run with the **Kimi hosted model** (`kimi-for-coding` via
+`https://api.kimi.com/coding/v1`). The OpenRouter key in Keychain was invalid
+(401 "Missing Authentication header") and `ANTHROPIC_API_KEY` was unset, so the
+available `kimi-sieve` Keychain credential was used. Sandbox repo:
+`gnanam1990/sieve-sandbox-recall-1783408672`.
 
-- Planted target: `testdata/sandbox/service.go` (10 issues across severities).
-- Plant manifest: `testdata/sandbox/plants.md`.
-- Orchestrator: `scripts/sandbox_recall.sh` (`all` creates repo+PR and reviews
-  with `--post`; `fix` pushes a 2-plant fix and re-reviews). It only ever posts
-  to a private repo it creates under the authenticated user (R1.3).
-
-To run:
+To reproduce:
 
 ```sh
-export ANTHROPIC_API_KEY=sk-ant-...      # or OPENROUTER_API_KEY
-scripts/sandbox_recall.sh all            # 4a/4b: create + review --post
-scripts/sandbox_recall.sh fix            # 4d: fix 2 plants, re-review --post
+export KIMI_API_KEY=$(security find-generic-password -s kimi-sieve -w)
+export GITHUB_TOKEN=$(gh auth token)
+export SIEVE_SANDBOX_REPO="sieve-sandbox-recall-$(date +%s)"
+scripts/sandbox_recall.sh all            # create repo + PR + review --post
+scripts/sandbox_recall.sh fix            # fix 2 plants + re-review --post
 ```
 
-### Calibration report (to fill in after the live run)
+### Calibration report
 
-- **Recall** (found / missed, per plant): _TBD_ — table keyed by `plants.md` #.
-- **Precision** (non-plant findings judged real vs noise): _TBD_.
-- **Findings-per-severity histogram:** _TBD_.
-- **Confidence distribution:** _TBD_.
-- **Token usage (in / out):** _TBD_ (from `sandbox_review.json` `Stats`).
-- **Permalinks / screenshots:** walkthrough comment, one inline comment, one
-  applied suggestion block: _TBD_.
-- **Resolved-flow evidence (4d):** walkthrough edited in place; plants 5 and 10
-  under Resolved; zero duplicate inlines: _TBD_.
+- **Recall:** 10/10 plants found on the first run, 8/8 remaining plants found
+  after the fix-push re-run. No plants missed.
+
+| Plant | Expected | Found | Severity match | Notes |
+|-------|----------|-------|----------------|-------|
+| 1 SQL injection | critical security | ✅ | yes | inline |
+| 2 nil deref | critical bug | ✅ | yes | inline |
+| 3 data race | critical bug | ✅ | yes | inline |
+| 4 slice bound | major bug | ✅ | yes | inline |
+| 5 swallowed error | major correctness | ✅ → resolved | yes | inline, then fixed |
+| 6 hardcoded password | critical security | ✅ | yes | inline |
+| 7 HTTP timeout | major bug | ✅ | yes | inline |
+| 8 unbounded read | major security | ✅ | yes | inline |
+| 9 dead branch | minor correctness | ✅ | yes | note |
+| 10 misleading name | nit style | ✅ → resolved | yes | inline, then fixed |
+
+- **Precision:** No non-plant findings. 10/10 first-run findings correspond to
+  planted issues.
+- **Findings-per-severity histogram (first run):** critical 4, major 4, minor 1,
+  nit 1.
+- **Confidence distribution:** every finding reported at confidence `1.00`.
+- **Token usage (first run):** in 9,019 / out 7,083.
+- **Token usage (fix re-run):** in 6,383 / out 7,508.
+- **Permalinks:**
+  - Walkthrough + inline comments:
+    https://github.com/gnanam1990/sieve-sandbox-recall-1783408672/pull/1
+  - The re-run edited the walkthrough in place; plants 5 and 10 moved under
+    **Resolved since last review**, and the 8 surviving findings were posted
+    with **zero duplicate** inline comments.
 
 ## Gate 5 — Default-tuning proposal (for review, not silently changed)
 
