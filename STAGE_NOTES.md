@@ -1048,3 +1048,43 @@ Deferred to the batch at the top of this file. Stage 9 has no unique live
 steps beyond the general batch; its purpose is to leave `main` in a clean,
 documented, regression-guarded state for the live batch.
 
+---
+
+# Stage 10 — Post-launch hardening
+
+## Goal
+
+Polish the release we just shipped (v0.2.1) and close the gaps that only
+surface in real CI / daemon use: Action ergonomics, observability, and
+supply-chain verification.
+
+## Candidates / plan
+
+1. **Action smoke test matrix on every CI push** — already done in this
+   session; verifies `@v0` works on `ubuntu-latest` and `windows-latest` with
+   `provider: fake`.
+2. **`repo` / `pr` action inputs** — already done; lets non-`pull_request`
+   workflows or explicit smoke tests target a specific PR.
+3. **`verify_signatures` action input** — already done; hard-fails when cosign
+   verification is required but missing.
+4. **`sieve admin` CLI** — already done; queries `/admin` for ops without
+   `curl`.
+5. **Persistent dead-letter journal + `/admin` forensics** — already done;
+   `data_dir/dead.jsonl` survives restarts.
+6. **Dependabot for Go modules** — already done.
+
+## Next concrete stage
+
+The remaining gap is a **dismiss/ignore rule system**: users can tell sieve
+"this finding is noise / accepted risk" so it stops re-posting the same
+fingerprint. This needs:
+
+- a `.sieve/ignore.yml` or repo-level config section with per-path/category
+  patterns and optional expiration,
+- a `sieve ignore --repo R --pr N --fingerprint FP` CLI that writes to the
+  store (or opens a PR against `.sieve/ignore.yml`),
+- gate integration that drops ignored fingerprints before routing,
+- a walkthrough section showing which findings were ignored this run.
+
+This is Stage 11. Stage 10 is declared complete once the v0.2.1 release items
+above are in `main` and the smoke test is green.
