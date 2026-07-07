@@ -1247,10 +1247,34 @@ command, instead of forcing manual rule authoring.
 
   confirming the suppressed finding is visible and auditable.
 
-- [ ] **Dismissal → fingerprint suggestion** — pending: requires resolving a
-  sieve review thread via the GitHub UI/API. The `TypeDismissed` path is covered
-  by unit tests and by the existing `ResolvedThreads` GraphQL read used during
-  `sieve review --post` / `sieve sync`.
+- [x] **Dismissal → fingerprint suggestion → apply → ignored footer** — same
+  sandbox PR #1. Resolved the SQL-injection review thread via GraphQL
+  (`resolveReviewThread`). After `sieve sync`, `sieve ignore --suggest` now
+  proposed two rules (down-vote + dismissal):
+
+  ```
+  [0] fingerprint: f9eb13e0f3f98aa1
+      reason: 1 negative reaction
+      expires: 2026-10-05
+
+  [1] fingerprint: 964dc18e066d9466
+      reason: 1 dismissal
+      expires: 2026-10-05
+  ```
+
+  Applied suggestion `[1]` to the sandbox `.sieve/ignore.yml`, committed/pushed,
+  deleted the walkthrough to force a full re-review, and re-ran with Ollama.
+  The re-review reported **8 findings (0 dropped, 2 ignored)** and the footer
+  showed both suppressed findings:
+
+  ```
+  <details><summary>Ignored by rule (2)</summary>
+
+  - 🔴 critical · SQL injection via string concatenation (service.go:18-18)
+  - 🔴 critical · concurrent map write without synchronization (service.go:40-40)
+
+  </details>
+  ```
 
 ---
 
