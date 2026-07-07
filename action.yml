@@ -48,6 +48,20 @@ inputs:
     required: false
     default: ""
 
+outputs:
+  inline_count:
+    description: "Number of inline-tier findings from the gate"
+    value: ${{ steps.review.outputs.inline_count }}
+  notes_count:
+    description: "Number of notes-tier findings from the gate"
+    value: ${{ steps.review.outputs.notes_count }}
+  resolved_count:
+    description: "Number of findings resolved since the last review"
+    value: ${{ steps.review.outputs.resolved_count }}
+  sarif_path:
+    description: "The SARIF file path passed via sarif_files (empty if unset)"
+    value: ${{ steps.review.outputs.sarif_path }}
+
 runs:
   using: composite
   steps:
@@ -78,11 +92,25 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-        arch="$(uname -m)"
+        # Prefer RUNNER_OS/RUNNER_ARCH (always set by GitHub Actions) so the same
+        # script works on Linux, macOS, and Windows runners. Fallback to uname for
+        # local/debug invocation.
+        if [ -n "${RUNNER_OS:-}" ] && [ -n "${RUNNER_ARCH:-}" ]; then
+          os="${RUNNER_OS}"
+          arch="${RUNNER_ARCH}"
+        else
+          os="$(uname -s)"
+          arch="$(uname -m)"
+        fi
+        case "$os" in
+          Linux|linux) os=linux ;;
+          macOS|Darwin|darwin) os=darwin ;;
+          Windows|MINGW*|CYGWIN*|MSYS*) os=windows ;;
+          *) echo "::error::unsupported OS: $os"; exit 1 ;;
+        esac
         case "$arch" in
-          x86_64|amd64) arch=amd64 ;;
-          aarch64|arm64) arch=arm64 ;;
+          x86_64|amd64|X64|x64) arch=amd64 ;;
+          aarch64|arm64|ARM64) arch=arm64 ;;
           *) echo "::error::unsupported architecture: $arch"; exit 1 ;;
         esac
         asset="sieve_${os}_${arch}"
@@ -130,10 +158,16 @@ runs:
           fi
         fi
 
-        install -m 0755 "${tmp}/${asset}" "${tmp}/sieve"
+        if [ "$os" = "windows" ]; then
+          # Git Bash on Windows runners: no `install`, and the binary needs .exe.
+          cp "${tmp}/${asset}" "${tmp}/sieve.exe"
+        else
+          install -m 0755 "${tmp}/${asset}" "${tmp}/sieve"
+        fi
         echo "bindir=${tmp}" >> "$GITHUB_OUTPUT"
 
     - name: Run sieve review
+      id: review
       shell: bash
       env:
         BINDIR: ${{ steps.download.outputs.bindir }}
@@ -185,11 +219,21 @@ runs:
         fi
 
         out="$(mktemp)"
+        if [ -f "${BINDIR}/sieve.exe" ]; then
+          sieve_bin="${BINDIR}/sieve.exe"
+        else
+          sieve_bin="${BINDIR}/sieve"
+        fi
         set +e
-        "${BINDIR}/sieve" "${args[@]}" >"${out}"
+        "${sieve_bin}" "${args[@]}" >"${out}"
         code=$?
         set -e
         cat "${out}"  # ReviewContext JSON to the log
+
+        # Default counts; jq will overwrite them if the JSON is present.
+        inl=0
+        notes=0
+        res=0
 
         # Run summary from sieve's JSON output.
         if command -v jq >/dev/null 2>&1 && [ -s "${out}" ]; then
@@ -209,6 +253,13 @@ runs:
             echo "- tokens: in ${tin} / out ${tout}"
           } >> "$GITHUB_STEP_SUMMARY"
         fi
+
+        {
+          echo "inline_count=${inl}"
+          echo "notes_count=${notes}"
+          echo "resolved_count=${res}"
+          echo "sarif_path=${SARIF_FILES}"
+        } >> "$GITHUB_OUTPUT"
 
         # Exit-code policy: 2 (partial) is a warning, not a failure, unless
         # fail_on_partial=true — a truncated diff must not break someone's CI.

@@ -109,12 +109,18 @@ func New(sc Config, opts Options) (*Server, error) {
 	s.q = q
 
 	secret := os.Getenv(sc.WebhookSecretEnv)
+	adminSecret := os.Getenv(sc.AdminSecretEnv)
+	if adminSecret == "" {
+		log.Info("admin endpoint disabled: set the env var named by admin_secret_env to enable /admin")
+	}
 	wh, err := webhook.New(webhook.Config{
 		Secret:       []byte(secret),
+		AdminSecret:  []byte(adminSecret),
 		ReposAllow:   sc.ReposAllow,
 		ReviewDrafts: baseCfg.Review.ReviewDrafts,
 		Enqueue:      q.Enqueue,
 		QueueStats:   func() (int, int) { return q.Depth(), q.DeadLetters() },
+		AdminStats:   func() webhook.AdminStats { return webhook.AdminStats{Running: q.Running(), RecentDead: q.RecentDead()} },
 		Version:      version.Version,
 		Log:          log,
 	}, sc.DataDir)

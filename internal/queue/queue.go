@@ -38,11 +38,22 @@ func (j Job) Key() string { return j.Repo + "#" + strconv.Itoa(j.PR) }
 type op string
 
 const (
-	opEnqueue  op = "enqueue"
-	opDone     op = "done"
-	opDead     op = "dead"
-	opAttempt  op = "attempt" // crash-resilient retry counter; see runWithRetry
+	opEnqueue op = "enqueue"
+	opDone    op = "done"
+	opDead    op = "dead"
+	opAttempt op = "attempt" // crash-resilient retry counter; see runWithRetry
 )
+
+// DeadRecord is a forensics snapshot of a dead-lettered job.
+type DeadRecord struct {
+	Repo      string    `json:"repo"`
+	PR        int       `json:"pr"`
+	HeadSHA   string    `json:"head_sha"`
+	Delivery  string    `json:"delivery_id,omitempty"`
+	Attempts  int       `json:"attempts"`
+	Error     string    `json:"error"`
+	Timestamp time.Time `json:"timestamp"`
+}
 
 type record struct {
 	Op      op     `json:"op"`
@@ -98,6 +109,10 @@ type Queue struct {
 	// from opAttempt records on replay so a crash mid-backoff resumes from the
 	// last attempt rather than 0 (otherwise a flaky upstream loops forever).
 	attempts map[string]int
+
+	// recentDead keeps the last N dead-lettered jobs for the /admin forensics
+	// endpoint without having to re-read the entire queue log.
+	recentDead []DeadRecord
 
 	// runCtx is the context workers run jobs under. It is deliberately NOT the
 	// context passed to Start/Serve (which SIGTERM cancels) — that path would
@@ -439,6 +454,18 @@ func (q *Queue) complete(job Job, err error) {
 		_ = q.writeLocked(record{Op: opDead, Job: job, Err: sanitizeLog(err.Error())})
 		q.dead++
 		q.log.Error("job dead-lettered", "repo", sanitizeLog(job.Repo), "pr", job.PR, "err", sanitizeLog(err.Error()))
+		q.recentDead = append(q.recentDead, DeadRecord{
+			Repo:      sanitizeLog(job.Repo),
+			PR:        job.PR,
+			HeadSHA:   job.HeadSHA,
+			Delivery:  sanitizeLog(job.DeliveryID),
+			Attempts:  q.maxRetries + 1,
+			Error:     sanitizeLog(err.Error()),
+			Timestamp: time.Now().UTC(),
+		})
+		if len(q.recentDead) > 100 {
+			q.recentDead = q.recentDead[len(q.recentDead)-100:]
+		}
 	} else {
 		_ = q.writeLocked(record{Op: opDone, Job: job})
 		// Durability: a crash between Write returning and the OS flushing the
@@ -480,6 +507,28 @@ func (q *Queue) DeadLetters() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.dead
+}
+
+// Running returns the keys of jobs currently in flight.
+func (q *Queue) Running() []string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make([]string, 0, len(q.running))
+	for k := range q.running {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// RecentDead returns the last dead-lettered jobs (newest last), bounded to the
+// most recent 100 for memory safety.
+func (q *Queue) RecentDead() []DeadRecord {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make([]DeadRecord, len(q.recentDead))
+	copy(out, q.recentDead)
+	return out
 }
 
 // publishGauges updates optional metric gauges from the current state.

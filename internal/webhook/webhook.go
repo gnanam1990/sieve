@@ -7,6 +7,7 @@ package webhook
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
 
@@ -29,22 +31,34 @@ var enqueueActions = map[string]bool{
 	"opened": true, "synchronize": true, "reopened": true, "ready_for_review": true,
 }
 
+// AdminStats exposes queue runtime details for the /admin endpoint.
+type AdminStats struct {
+	Running    []string
+	RecentDead []queue.DeadRecord
+}
+
+// AdminSource returns the current admin-visible runtime details.
+type AdminSource func() AdminStats
+
 // Config wires a Handler to the daemon.
 type Config struct {
 	Secret       []byte   // webhook HMAC secret; required
+	AdminSecret  []byte   // basic-auth password for /admin; empty disables the endpoint
 	ReposAllow   []string // globs; empty = all installed repos
 	ReviewDrafts bool     // server-side draft policy
 	Enqueue      func(queue.Job) error
 	QueueStats   func() (depth, dead int)
+	AdminStats   AdminSource // nil disables /admin detail endpoints
 	Version      string
 	Log          *slog.Logger
 }
 
-// Handler serves /webhook and /healthz.
+// Handler serves /webhook, /healthz, and (optionally) /admin.
 type Handler struct {
-	cfg      Config
-	dedupe   *deliveryLog
-	rejected atomic.Int64 // signature verification failures
+	cfg       Config
+	dedupe    *deliveryLog
+	rejected  atomic.Int64 // signature verification failures
+	startTime time.Time
 }
 
 // New builds a Handler, loading the persisted delivery log from dataDir.
@@ -59,7 +73,7 @@ func New(cfg Config, dataDir string) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Handler{cfg: cfg, dedupe: d}, nil
+	return &Handler{cfg: cfg, dedupe: d, startTime: time.Now().UTC()}, nil
 }
 
 // Mux returns the HTTP routes; nothing beyond /webhook and /healthz is exposed.
@@ -70,10 +84,11 @@ func (h *Handler) Mux() *http.ServeMux {
 }
 
 // RegisterRoutes adds the webhook routes to an existing mux. Used by server.go
-// to compose /webhook, /healthz, and /metrics on one handler.
+// to compose /webhook, /healthz, /admin, and /metrics on one handler.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/webhook", h.handleWebhook)
 	mux.HandleFunc("/healthz", h.handleHealthz)
+	mux.HandleFunc("/admin", h.handleAdmin)
 }
 
 // RejectedCount is the number of deliveries that failed signature verification.
@@ -249,6 +264,37 @@ func (h *Handler) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 		"version":           h.cfg.Version,
 		"queue_depth":       depth,
 		"dead_letters":      dead,
+		"rejected_webhooks": h.rejected.Load(),
+	})
+}
+
+// handleAdmin exposes runtime details under HTTP basic auth. It is disabled when
+// AdminSecret is empty, returning 404 so scanners cannot tell the endpoint exists.
+func (h *Handler) handleAdmin(w http.ResponseWriter, r *http.Request) {
+	if len(h.cfg.AdminSecret) == 0 || h.cfg.AdminStats == nil {
+		http.NotFound(w, r)
+		return
+	}
+	user, pass, ok := r.BasicAuth()
+	if !ok || user != "admin" || subtle.ConstantTimeCompare([]byte(pass), h.cfg.AdminSecret) != 1 {
+		w.Header().Set("WWW-Authenticate", `Basic realm="sieve admin"`)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	depth, dead := 0, 0
+	if h.cfg.QueueStats != nil {
+		depth, dead = h.cfg.QueueStats()
+	}
+	stats := h.cfg.AdminStats()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"version":           h.cfg.Version,
+		"uptime_seconds":    time.Since(h.startTime).Seconds(),
+		"queue_depth":       depth,
+		"dead_letters":      dead,
+		"running":           stats.Running,
+		"recent_dead":       stats.RecentDead,
 		"rejected_webhooks": h.rejected.Load(),
 	})
 }

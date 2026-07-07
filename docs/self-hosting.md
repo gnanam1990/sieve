@@ -53,6 +53,7 @@ app:
   id: 123456                      # your App ID
   private_key_path: /etc/sieve/app.pem
 webhook_secret_env: SIEVE_WEBHOOK_SECRET  # env var holding the webhook secret
+admin_secret_env: SIEVE_ADMIN_SECRET      # optional: enables /admin endpoint
 data_dir: /var/lib/sieve          # queue + delivery + outcome stores
 repos_allow: ["your-org/*"]       # optional glob allowlist; omit = all installed repos
 workers: 2
@@ -185,8 +186,11 @@ server {
 ```
 
 Only `/webhook` needs to be public. `/healthz` (version, queue depth,
-dead-letter count) is handy to expose to your own monitoring, but nothing else
-is served.
+dead-letter count) is handy to expose to your own monitoring. `/admin` is
+available only when `admin_secret_env` is set; it returns the same stats plus
+the running job keys and the last 100 dead-lettered jobs under HTTP basic auth
+(`admin:<secret>`). Do not expose `/admin` to the internet without restricting
+it to your own IP range or VPN.
 
 ---
 
@@ -234,10 +238,13 @@ Then point your GitHub App webhook at `https://sieve-serve.fly.dev/webhook`.
 
 ## Observability
 
-The daemon exposes three endpoints on the configured `listen` port:
+The daemon exposes these endpoints on the configured `listen` port:
 
 - `/webhook` — GitHub App webhooks (public via proxy).
 - `/healthz` — liveness: version, queue depth, dead-letter count.
+- `/admin` — runtime details: version, uptime, queue depth, running jobs, last 100
+  dead-lettered jobs. Requires HTTP basic auth (`admin:<secret>`) and is enabled
+  only when `admin_secret_env` is set.
 - `/metrics` — Prometheus text exposition of:
   - `sieve_reviews_total{outcome,pipeline}`
   - `sieve_review_duration_seconds_bucket/p50/p95/p99`

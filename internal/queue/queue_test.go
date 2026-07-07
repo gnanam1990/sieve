@@ -373,6 +373,35 @@ func TestEnqueueLogWriteError(t *testing.T) {
 	}
 }
 
+func TestRunningAndRecentDead(t *testing.T) {
+	// Gate blocks the first attempt long enough to observe Running(); after we
+	// close the gate all attempts (fail=true) finish quickly and the job is
+	// dead-lettered. We do NOT use a started channel here — its buffer would
+	// block the harness on the third attempt once we stopped reading it.
+	h := &harness{gate: make(chan struct{}), fail: true}
+	q := openQ(t, h, 1)
+	q.Start(context.Background())
+	if err := q.Enqueue(job("o/r", 1, "s")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return len(q.Running()) == 1 })
+	running := q.Running()
+	if len(running) != 1 || running[0] != "o/r#1" {
+		t.Fatalf("running = %v", running)
+	}
+	// Let it exhaust retries and die.
+	close(h.gate)
+	waitFor(t, func() bool { return q.DeadLetters() == 1 })
+	if len(q.Running()) != 0 {
+		t.Fatalf("no jobs should be running after completion, got %v", q.Running())
+	}
+	dead := q.RecentDead()
+	if len(dead) != 1 || dead[0].Repo != "o/r" || dead[0].PR != 1 {
+		t.Fatalf("recent dead = %v", dead)
+	}
+	_ = q.Shutdown(context.Background())
+}
+
 // waitFor polls cond until true or fails after ~2s.
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()

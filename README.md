@@ -148,9 +148,9 @@ intentionally omitted because SARIF describes current issues.
 ## FAQ: is there a Docker image?
 
 No — and that's the point. sieve is a single static binary with no runtime
-dependencies; the Action downloads it directly (a few MB, checksum-verified) and
-runs it. A container would add a `docker pull`, a registry, and image-scanning
-overhead to buy nothing. Windows builds and cosign signing are on the backlog.
+dependencies; the Action downloads it directly (a few MB, checksum-verified and
+cosign-signed) and runs it. A container would add a `docker pull`, a registry,
+and image-scanning overhead to buy nothing.
 
 ## License
 

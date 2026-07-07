@@ -1,0 +1,35 @@
+name: sieve PR review + SARIF
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write # required by github/codeql-action/upload-sarif
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: sieve
+        uses: gnanam1990/sieve@v0
+        with:
+          provider: anthropic
+          model: claude-sonnet-5
+          api_key_env_name: ANTHROPIC_API_KEY
+          post: true
+          sarif_files: sieve.sarif
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Upload SARIF to GitHub Security tab
+        if: ${{ steps.sieve.outputs.inline_count != '0' || steps.sieve.outputs.notes_count != '0' }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.sieve.outputs.sarif_path }}
+          category: sieve

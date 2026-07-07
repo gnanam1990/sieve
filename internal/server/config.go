@@ -27,6 +27,7 @@ type Config struct {
 	Listen           string                     `yaml:"listen"`
 	App              AppConfig                  `yaml:"app"`
 	WebhookSecretEnv string                     `yaml:"webhook_secret_env"`
+	AdminSecretEnv   string                     `yaml:"admin_secret_env"`
 	DataDir          string                     `yaml:"data_dir"`
 	ReposAllow       []string                   `yaml:"repos_allow"`
 	Workers          int                        `yaml:"workers"`

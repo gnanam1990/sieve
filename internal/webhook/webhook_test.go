@@ -290,6 +290,70 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
+func TestAdminDisabledWhenNoSecret(t *testing.T) {
+	h := newHandler(t, &recorder{}, nil, false)
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	w := httptest.NewRecorder()
+	h.Mux().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("admin without secret want 404, got %d", w.Code)
+	}
+}
+
+func TestAdminRequiresBasicAuth(t *testing.T) {
+	rec := &recorder{}
+	h, err := New(Config{
+		Secret:      testSecret,
+		AdminSecret: []byte("admin-pass"),
+		AdminStats:  func() AdminStats { return AdminStats{Running: []string{"org/repo#7"}} },
+		ReposAllow:  nil,
+		Enqueue:     rec.enqueue,
+		QueueStats:  func() (int, int) { return 2, 1 },
+		Version:     "v-test",
+		Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No auth.
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	w := httptest.NewRecorder()
+	h.Mux().ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("admin without auth want 401, got %d", w.Code)
+	}
+
+	// Wrong password.
+	req2 := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	req2.SetBasicAuth("admin", "wrong")
+	w2 := httptest.NewRecorder()
+	h.Mux().ServeHTTP(w2, req2)
+	if w2.Code != http.StatusUnauthorized {
+		t.Fatalf("admin with wrong pass want 401, got %d", w2.Code)
+	}
+
+	// Correct password.
+	req3 := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	req3.SetBasicAuth("admin", "admin-pass")
+	w3 := httptest.NewRecorder()
+	h.Mux().ServeHTTP(w3, req3)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("admin with correct pass want 200, got %d", w3.Code)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(w3.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["version"] != "v-test" || out["queue_depth"].(float64) != 2 || out["dead_letters"].(float64) != 1 {
+		t.Fatalf("admin payload wrong: %v", out)
+	}
+	running := out["running"].([]any)
+	if len(running) != 1 || running[0] != "org/repo#7" {
+		t.Fatalf("running wrong: %v", running)
+	}
+}
+
 func TestWebhookMethodNotAllowed(t *testing.T) {
 	h := newHandler(t, &recorder{}, nil, false)
 	req := httptest.NewRequest(http.MethodGet, "/webhook", nil)
