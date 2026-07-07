@@ -127,6 +127,10 @@ runs:
           *) echo "::error::unsupported architecture: $arch"; exit 1 ;;
         esac
         asset="sieve_${os}_${arch}"
+        # Windows raw binaries are published with the .exe extension.
+        if [ "$os" = "windows" ]; then
+          asset="${asset}.exe"
+        fi
         # GITHUB_ACTION_REPOSITORY is the repo that owns the action
         # (gnanam1990/sieve), not the repo running the workflow. Use it explicitly
         # because GITHUB_REPOSITORY is the caller's repo and will not have the

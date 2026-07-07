@@ -64,6 +64,7 @@ jobs:
         with:
           provider: fake
           post: false
+          config_path: .sieve.fake.yml
           repo: gnanam1990/sieve
           pr: "1"
 
