@@ -1114,6 +1114,15 @@ re-posting them, while keeping the suppression decision visible and auditable.
     one suppressed by category.
   - `cmd/sieve.TestIgnoreCLI` verifies no-matcher error, rule append, and
     preamble preservation.
+- **CI follow-up** — the Stage 11 push exposed latent issues that were fixed
+  in the same session so `main` stays green:
+  - `internal/local/local.go` gosec G204 annotation.
+  - `readIgnoreFile` logger usage (revive unused-parameter).
+  - All temp git repos in local-review tests created with
+    `--initial-branch=main` (CI runners default to `master`).
+  - `action-smoke` workflow switched to `uses: ./` so it tests the current
+    action definition, with a generated fake fixture and a Windows `.exe`
+    asset-name fix in `action.yml`.
 
 ## Live validation
 
