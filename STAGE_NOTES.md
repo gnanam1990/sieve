@@ -157,6 +157,25 @@ Executed after the Stages 5–9 batch.
 
 ---
 
+# v0.1.1 — cosign keyless signing
+
+- [x] **Add cosign signing** — `.github/workflows/release.yml` got
+  `id-token: write` permission + `sigstore/cosign-installer@v3`; `.goreleaser.yaml`
+  got a `signs:` block using keyless `cosign sign-blob` for every artifact.
+- [x] **Action verifies signatures** — `action.yml` downloads `.sig` / `.cert`
+  alongside the binary and runs `cosign verify-blob` when cosign is available.
+- [x] **Validate with prerelease** — pushed `v0.1.1-rc1`; release workflow
+  `28839254217` completed. All 8 artifacts plus `checksums.txt` now have
+  matching `.sig` and `.cert` files.
+- [x] **Local signature verification** — `cosign verify-blob` confirmed
+  `Verified OK` for both `sieve_darwin_arm64` and `checksums.txt`, with the
+  certificate identity matching the `release.yml` workflow at `refs/tags/v0.1.1-rc1`
+  and OIDC issuer `https://token.actions.githubusercontent.com`.
+- [ ] **Ship v0.1.1 stable** — once this is approved, tag `v0.1.1` on `main` to
+  move `v0` and publish signed stable artifacts + the Homebrew cask.
+
+---
+
 # Stage 2 — Provider Layer + Review Pass + Findings Schema
 
 ## R0 — ZERO survey: lift vs rewrite
