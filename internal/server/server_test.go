@@ -343,13 +343,20 @@ func TestMetricsEndpoint(t *testing.T) {
 	s.Handler().ServeHTTP(httptest.NewRecorder(), req)
 	waitFor(t, func() bool { return atomic.LoadInt32(&hub.creates) == 1 })
 
-	rec := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	s.Handler().ServeHTTP(rec, req2)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("/metrics status %d", rec.Code)
-	}
-	bodyStr := rec.Body.String()
+	// Wait for the review to finish and the counter to be recorded; under -race
+	// and -shuffle the /metrics scrape can race with runReview's final counter
+	// increment, so poll the endpoint until the expected counter appears.
+	var bodyStr string
+	waitFor(t, func() bool {
+		rec := httptest.NewRecorder()
+		req2 := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		s.Handler().ServeHTTP(rec, req2)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("/metrics status %d", rec.Code)
+		}
+		bodyStr = rec.Body.String()
+		return strings.Contains(bodyStr, "sieve_reviews_total{outcome=\"ok\",pipeline=\"single\"} 1")
+	})
 	for _, want := range []string{
 		"# TYPE sieve_queue_depth gauge",
 		"sieve_workers 1",
