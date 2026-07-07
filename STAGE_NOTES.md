@@ -1162,24 +1162,30 @@ command, instead of forcing manual rule authoring.
 
 ## Decisions / smallest-reasonable-choice notes
 
-- **Two signal sources:**
-  1. `internal/learnings` clusters — repeated false-positive patterns that
-     have been downvoted or dismissed.
-  2. GitHub resolved review threads — when a maintainer resolves a sieve
-     inline comment via the GitHub UI, that finding is a suppression candidate.
+- **Signal sources are the local outcome store.** The suggestion engine consumes
+  `memory.TypeDismissed` (resolved review thread) and `memory.TypeReaction`
+  events with `Minus > Plus` (down-voted inline comment). These are already
+  recorded by `recordOutcomes` during `sieve review --post` / `sieve sync`, so
+  no new GitHub read path is required in this stage.
+- **Finding metadata is recovered from the latest `TypeFinding`.**
+  Dismissal/reaction events carry only the fingerprint; they are joined with the
+  most recent `TypeFinding` event for the same fingerprint to recover path,
+  category, severity, and title.
 - **Suggestion is read-only and auditable.** The CLI prints the proposed rule,
-  explains the signal (e.g., "dismissed 3 times in PRs #42, #47, #51"), and
-  appends it to `.sieve/ignore.yml` only when the maintainer confirms. No
+  explains the signal (e.g., "dismissed in PR #42"), and appends it to
+  `.sieve/ignore.yml` only when the maintainer runs `--apply-suggestion`. No
   automatic repository writes.
 - **Rule generation picks the least-broad matcher that covers the signal.**
-  Preference order: fingerprint (most precise) → path+category+title substring
-  → path glob → category. The goal is to stop the exact noise without hiding
-  unrelated findings.
+  Preference order: fingerprint (most precise, single occurrence) →
+  path+category+common title token (grouped occurrences) → path+category →
+  category. The goal is to stop the exact noise without hiding unrelated
+  findings.
 - **Expiration default.** Suggested rules carry a 90-day default expiration so
   stale suppressions are reviewed again; `--no-expiry` keeps them permanent.
-- **Dismissal integration is GraphQL-only where needed.** Reuse or extend
-  `internal/gh/graphql.go` (`ResolvedThreads`) to fetch resolved review threads
-  per PR; the read is allowlisted in the posting-isolation test.
+- **Dismissal integration reuses existing GraphQL reads.** `internal/gh/graphql.go`
+  (`ResolvedThreads`) is already called by the outcome recorder; the suggestion
+  engine reads the persisted `TypeDismissed` events rather than adding a new
+  query.
 - **`sieve ignore --suggest` and `sieve ignore --apply-suggestion`.** The first
   prints candidate rules; the second appends a chosen rule to the local
   `.sieve/ignore.yml` with preamble preservation.
@@ -1189,17 +1195,26 @@ command, instead of forcing manual rule authoring.
 
 ## Offline gates
 
-- `go vet ./...` clean; `golangci-lint` clean.
-- `make test` (`-race -shuffle=on`) green.
-- `make cover` green; new `internal/ignore/suggest` package ≥ 90%, overall
-  ≥ 85%.
-- Tests:
-  - Suggestion ranking from fake learning clusters.
-  - Dismissal→rule mapping from a mocked GraphQL response.
-  - CLI `--suggest` / `--apply-suggestion` with temp repo and fake provider.
-  - Preamble preservation and marker handling when appending a suggested rule.
-  - Isolation: no new packages write to GitHub except through existing
-    `internal/post` / `internal/gh` paths.
+- [x] `go vet ./...` clean.
+- [x] `golangci-lint` clean. Note: the install-script binary for v2.3.0 is built
+  with go1.24 and panics on Go 1.26 syntax. Building from source with
+  `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.3.0`
+  produces a Go-1.26-compatible binary. Two pre-existing G115 findings in
+  `internal/symbols/grammar.go` (bounded `int`↔`uint64` conversions in a clamp
+  helper) were false positives and were suppressed with `//nolint:gosec`
+  comments so the repo is lint-clean.
+- [x] `make test` (`-race -shuffle=on`) green.
+- [x] `make cover` green; `internal/ignore/suggest` 97.5% (≥ 90%),
+  `internal/ignore` 91.1%, overall 86.7% (≥ 85%).
+- [x] Tests:
+  - `internal/ignore/suggest` unit tests: empty store, dismissed → fingerprint
+    rule, down-vote → fingerprint rule, grouped signals → path+category+title
+    rule, multiple groups, skipped events without finding metadata, neutral
+    reactions ignored.
+  - `cmd/sieve` CLI tests for `--suggest` (no signals, with signals, requires
+    `--repo`) and `--apply-suggestion` (append to `.sieve/ignore.yml` with
+    marker preservation).
+  - No new packages write to GitHub; the suggest path is read-only.
 
 ## Live validation
 
