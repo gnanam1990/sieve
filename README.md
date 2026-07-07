@@ -68,6 +68,7 @@ Copy a ready-made template into `.github/workflows/` from
 | `post` | `true` | `false` = review without writing |
 | `version` | *(VERSION file)* | sieve release to download; `@v0` resolves the matching binary |
 | `fail_on_partial` | `false` | fail the job on exit 2 |
+| `sarif_files` | — | path to write a SARIF v2.1.0 report, e.g. `sieve.sarif` |
 
 ### Marketplace
 
@@ -113,6 +114,36 @@ sieve review --repo owner/name --pr 123 --post   # …and post to the PR
 `--json-only` suppresses the stderr summary (combinable with `--post`). Exit
 codes: `0` ok · `2` partial (truncated context, a failed batch, or a failed
 inline post) · `1` error.
+
+### SARIF output (GitHub Security tab)
+
+`sieve review --sarif sieve.sarif` writes findings in
+[SARIF v2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
+format. Upload them with `github/codeql-action/upload-sarif`:
+
+```sh
+sieve review --repo owner/name --pr 123 --sarif sieve.sarif
+```
+
+In a workflow:
+
+```yaml
+- uses: gnanam1990/sieve@v0
+  with:
+    provider: anthropic
+    model: claude-sonnet-5
+    sarif_files: sieve.sarif
+  env:
+    SIEVE_API_KEY: ${{ secrets.SIEVE_API_KEY }}
+- uses: github/codeql-action/upload-sarif@v3
+  if: always()
+  with:
+    sarif_file: sieve.sarif
+    category: sieve
+```
+
+Only active findings (inline + notes) are included; resolved findings are
+intentionally omitted because SARIF describes current issues.
 
 ## FAQ: is there a Docker image?
 

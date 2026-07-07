@@ -17,6 +17,7 @@ import (
 	"github.com/gnanam1990/sieve/internal/gh"
 	"github.com/gnanam1990/sieve/internal/memory"
 	"github.com/gnanam1990/sieve/internal/review"
+	"github.com/gnanam1990/sieve/internal/sarif"
 	"github.com/gnanam1990/sieve/internal/server"
 	"github.com/gnanam1990/sieve/internal/version"
 )
@@ -74,6 +75,7 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 		jsonOnly = fs.Bool("json-only", false, "suppress the stderr summary (CI use)")
 		debug    = fs.Bool("debug", false, "debug logging")
 		apiURL   = fs.String("api-url", "", "GitHub API base URL override (testing)")
+		sarifOut = fs.String("sarif", "", "write a SARIF v2.1.0 report to this file for github/codeql-action/upload-sarif")
 	)
 	if err := fs.Parse(args); err != nil {
 		return exitError
@@ -149,10 +151,38 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 	if !*jsonOnly {
 		rc.WriteSummary(stderr)
 	}
+	if *sarifOut != "" {
+		if err := writeSarif(*sarifOut, rc); err != nil {
+			fmt.Fprintln(stderr, "error:", err)
+			return exitError
+		}
+	}
 	if rc.Truncated || rc.Stats.BatchesFailed > 0 || rc.Stats.InlinePostFailed > 0 {
 		return exitPartial
 	}
 	return exitOK
+}
+
+// writeSarif emits a SARIF report for the active gate findings.
+func writeSarif(path string, rc *review.ReviewContext) error {
+	opts := sarif.Options{
+		Version: version.String(),
+		Repo:    rc.Repo,
+		BaseSHA: rc.BaseSHA,
+	}
+	report := sarif.FromGate(rc.Gate, opts)
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create sarif file: %w", err)
+	}
+	if err := sarif.WriteJSON(f, report); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write sarif file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close sarif file: %w", err)
+	}
+	return nil
 }
 
 // forkSkipNotice reports a fork-PR skip to stderr and the Actions step summary
@@ -377,6 +407,7 @@ review flags:
                that enables writes; no config key can turn posting on
   --full       force a full re-review (disable incremental delta review)
   --json-only  suppress the stderr summary
+  --sarif      write a SARIF v2.1.0 report to this file for GitHub Security tab upload
   --debug      debug logging
 
 exit codes: 0 ok · 1 error · 2 partial (truncated input, failed batch, or a

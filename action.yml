@@ -44,7 +44,7 @@ inputs:
     required: false
     default: "false"
   sarif_files:
-    description: "Reserved for a future stage (SARIF ingestion). Accepted and warned about; currently a no-op."
+    description: "Path to write a SARIF v2.1.0 report (e.g. sieve.sarif). When set, sieve writes findings in SARIF format for upload to the GitHub Security tab via github/codeql-action/upload-sarif."
     required: false
     default: ""
 
@@ -153,10 +153,6 @@ runs:
       run: |
         set -euo pipefail
 
-        if [ -n "${SARIF_FILES}" ]; then
-          echo "::warning::sarif_files is reserved for a future stage and is currently ignored"
-        fi
-
         # Validate provider inputs (composite actions do not enforce `required`).
         if [ "${PROVIDER}" != "fake" ] && [ -z "${MODEL}" ]; then
           echo "::error::input 'model' is required for provider '${PROVIDER}'"; exit 1
@@ -184,6 +180,9 @@ runs:
 
         args=(review --config "${cfg}")
         if [ "${POST}" = "true" ]; then args+=(--post); fi
+        if [ -n "${SARIF_FILES}" ]; then
+          args+=(--sarif "${SARIF_FILES}")
+        fi
 
         out="$(mktemp)"
         set +e

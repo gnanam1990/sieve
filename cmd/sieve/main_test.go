@@ -371,6 +371,43 @@ func TestSyncCLI(t *testing.T) {
 	}
 }
 
+func TestReviewSarifOutput(t *testing.T) {
+	fixture := writeFakeFixture(t)
+	diffData, _ := readFixtureDiff(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/files"):
+			fmt.Fprint(w, `[{"filename":"alpha.txt","status":"modified"},{"filename":"beta.txt","status":"modified"}]`)
+		case strings.Contains(r.Header.Get("Accept"), "diff"):
+			w.Write(diffData) //nolint:errcheck
+		case strings.Contains(r.URL.Path, "/contents/"):
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			fmt.Fprint(w, `{"number":1,"title":"T","state":"open","user":{"login":"a"},"base":{"sha":"b"},"head":{"sha":"h"}}`)
+		}
+	}))
+	defer srv.Close()
+
+	sarifPath := filepath.Join(t.TempDir(), "sieve.sarif")
+	var out, errOut bytes.Buffer
+	code := run([]string{"review", "--repo", "o/r", "--pr", "1", "--token", "x",
+		"--api-url", srv.URL, "--config", fixture, "--sarif", sarifPath}, &out, &errOut)
+	if code != exitOK {
+		t.Fatalf("exit %d, want 0; stderr:\n%s", code, errOut.String())
+	}
+
+	data, err := os.ReadFile(sarifPath) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatalf("sarif file not created: %v", err)
+	}
+	if !strings.Contains(string(data), `"version": "2.1.0"`) {
+		t.Fatalf("sarif missing version marker:\n%s", string(data))
+	}
+	if !strings.Contains(string(data), `"sieve/bug"`) {
+		t.Fatalf("sarif missing rule id:\n%s", string(data))
+	}
+}
+
 func TestReviewErrorExitCode(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
