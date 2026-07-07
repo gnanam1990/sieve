@@ -69,6 +69,7 @@ Copy a ready-made template into `.github/workflows/` from
 | `version` | *(VERSION file)* | sieve release to download; `@v0` resolves the matching binary |
 | `fail_on_partial` | `false` | fail the job on exit 2 |
 | `sarif_files` | — | path to write a SARIF v2.1.0 report, e.g. `sieve.sarif` |
+| `verify_signatures` | `false` | require a valid cosign signature for the downloaded binary |
 
 ### Marketplace
 

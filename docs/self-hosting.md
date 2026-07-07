@@ -262,8 +262,10 @@ format — no client library is required.
 
 - **Durability / crash recovery.** `data_dir/queue.jsonl` is an append-only log;
   on restart the daemon replays any review that was enqueued but not finished.
-  Redeliveries are deduped via `data_dir/deliveries.jsonl`. A `kill -9` mid-review
-  loses only the in-flight run, which replays on the next start.
+  Redeliveries are deduped via `data_dir/deliveries.jsonl`.
+  `data_dir/dead.jsonl` persists the last 1000 dead-lettered jobs (with error,
+  attempts, and timestamp) for post-mortems. A `kill -9` mid-review loses only
+  the in-flight run, which replays on the next start.
 - **Coalescing.** A new push for a PR already queued replaces the older job (only
   the newest head is reviewed); a push while a review is running is queued behind
   it. At most one review runs per PR at a time.

@@ -114,6 +114,10 @@ type Queue struct {
 	// endpoint without having to re-read the entire queue log.
 	recentDead []DeadRecord
 
+	// deadLog is the append-only dead-letter journal. It is fsynced on every
+	// dead letter so a post-mortem survives a crash.
+	deadLog *os.File
+
 	// runCtx is the context workers run jobs under. It is deliberately NOT the
 	// context passed to Start/Serve (which SIGTERM cancels) — that path would
 	// abort an in-flight review mid-POST and produce partial GitHub writes
@@ -157,6 +161,11 @@ func Open(opts Options) (*Queue, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open queue log: %w", err)
 	}
+	deadLog, recentDead, err := openDeadLog(filepath.Join(opts.Dir, "dead.jsonl"))
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 	q := &Queue{
 		dir:        opts.Dir,
 		workers:    opts.Workers,
@@ -169,6 +178,8 @@ func Open(opts Options) (*Queue, error) {
 		attempts:   attempts,
 		running:    map[string]bool{},
 		f:          f,
+		deadLog:    deadLog,
+		recentDead: recentDead,
 	}
 	q.cond = sync.NewCond(&q.mu)
 	q.publishGauges()
@@ -283,6 +294,41 @@ func splitLines(data []byte) [][]byte {
 // messages that may quote user-controlled payloads) so a slog text-handler
 // cannot be log-forged into splitting one record across many apparent lines.
 // Truncates very long error chains so an attacker cannot blow up log volume.
+// openDeadLog opens or creates the dead-letter journal and replays at most the
+// last maxDeadJournal entries into recentDead. We cap the replay so a long-lived
+// daemon does not keep an ever-growing slice in memory.
+func openDeadLog(path string) (*os.File, []DeadRecord, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // daemon data
+	if err != nil {
+		return nil, nil, fmt.Errorf("open dead log: %w", err)
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // daemon data path
+	if errors.Is(err, os.ErrNotExist) {
+		return f, nil, nil
+	}
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("read dead log: %w", err)
+	}
+	var all []DeadRecord
+	for _, line := range splitLines(data) {
+		if len(line) == 0 {
+			continue
+		}
+		var rec DeadRecord
+		if err := json.Unmarshal(line, &rec); err != nil {
+			continue // tolerate torn final line
+		}
+		all = append(all, rec)
+	}
+	const maxDeadJournal = 1000
+	start := 0
+	if len(all) > maxDeadJournal {
+		start = len(all) - maxDeadJournal
+	}
+	return f, all[start:], nil
+}
+
 func sanitizeLog(s string) string {
 	if !strings.ContainsAny(s, "\r\n\t\x00") && len(s) <= 4096 {
 		return s
@@ -454,7 +500,7 @@ func (q *Queue) complete(job Job, err error) {
 		_ = q.writeLocked(record{Op: opDead, Job: job, Err: sanitizeLog(err.Error())})
 		q.dead++
 		q.log.Error("job dead-lettered", "repo", sanitizeLog(job.Repo), "pr", job.PR, "err", sanitizeLog(err.Error()))
-		q.recentDead = append(q.recentDead, DeadRecord{
+		rec := DeadRecord{
 			Repo:      sanitizeLog(job.Repo),
 			PR:        job.PR,
 			HeadSHA:   job.HeadSHA,
@@ -462,7 +508,9 @@ func (q *Queue) complete(job Job, err error) {
 			Attempts:  q.maxRetries + 1,
 			Error:     sanitizeLog(err.Error()),
 			Timestamp: time.Now().UTC(),
-		})
+		}
+		_ = q.writeDeadLocked(rec)
+		q.recentDead = append(q.recentDead, rec)
 		if len(q.recentDead) > 100 {
 			q.recentDead = q.recentDead[len(q.recentDead)-100:]
 		}
@@ -492,6 +540,23 @@ func (q *Queue) writeLocked(rec record) error {
 		q.log.Error("queue log write failed", "op", rec.Op, "err", err)
 		return fmt.Errorf("queue log write: %w", err)
 	}
+	return nil
+}
+
+// writeDeadLocked appends one dead-letter record and fsyncs it. Caller holds q.mu.
+func (q *Queue) writeDeadLocked(rec DeadRecord) error {
+	if q.deadLog == nil {
+		return nil
+	}
+	line, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	if _, err := q.deadLog.Write(append(line, '\n')); err != nil {
+		q.log.Error("dead log write failed", "err", err)
+		return fmt.Errorf("dead log write: %w", err)
+	}
+	_ = q.deadLog.Sync() //nolint:errcheck // best-effort fsync; a failure logs the write-err path
 	return nil
 }
 
@@ -593,6 +658,13 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 	q.f = nil
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close queue log: %w", err)
+	}
+	if q.deadLog != nil {
+		dl := q.deadLog
+		q.deadLog = nil
+		if err := dl.Close(); err != nil {
+			return fmt.Errorf("close dead log: %w", err)
+		}
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()

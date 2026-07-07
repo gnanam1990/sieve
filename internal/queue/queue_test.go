@@ -378,8 +378,12 @@ func TestRunningAndRecentDead(t *testing.T) {
 	// close the gate all attempts (fail=true) finish quickly and the job is
 	// dead-lettered. We do NOT use a started channel here — its buffer would
 	// block the harness on the third attempt once we stopped reading it.
+	dir := t.TempDir()
 	h := &harness{gate: make(chan struct{}), fail: true}
-	q := openQ(t, h, 1)
+	q, err := Open(Options{Dir: dir, Workers: 1, Run: h.run, Log: discardLog(), Backoff: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
 	q.Start(context.Background())
 	if err := q.Enqueue(job("o/r", 1, "s")); err != nil {
 		t.Fatal(err)
@@ -400,6 +404,17 @@ func TestRunningAndRecentDead(t *testing.T) {
 		t.Fatalf("recent dead = %v", dead)
 	}
 	_ = q.Shutdown(context.Background())
+
+	// Reopen: the dead-letter journal should replay the same record.
+	q2, err := Open(Options{Dir: dir, Workers: 1, Run: h.run, Log: discardLog(), Backoff: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead2 := q2.RecentDead()
+	if len(dead2) != 1 || dead2[0].Repo != "o/r" || dead2[0].PR != 1 {
+		t.Fatalf("dead letters did not survive reopen: %v", dead2)
+	}
+	_ = q2.Shutdown(context.Background())
 }
 
 // waitFor polls cond until true or fails after ~2s.

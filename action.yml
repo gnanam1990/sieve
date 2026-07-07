@@ -47,6 +47,10 @@ inputs:
     description: "Path to write a SARIF v2.1.0 report (e.g. sieve.sarif). When set, sieve writes findings in SARIF format for upload to the GitHub Security tab via github/codeql-action/upload-sarif."
     required: false
     default: ""
+  verify_signatures:
+    description: "Fail the step if cosign signature files (.sig/.cert) are missing or their verification fails. Set true when you require supply-chain verification."
+    required: false
+    default: "false"
 
 outputs:
   inline_count:
@@ -90,6 +94,7 @@ runs:
         VERSION: ${{ steps.resolve.outputs.version }}
         # gh needs a token; github.token avoids anonymous rate limits.
         GH_TOKEN: ${{ github.token }}
+        VERIFY_SIGNATURES: ${{ inputs.verify_signatures }}
       run: |
         set -euo pipefail
         # Prefer RUNNER_OS/RUNNER_ARCH (always set by GitHub Actions) so the same
@@ -144,7 +149,14 @@ runs:
         echo "checksum ok: ${asset}"
 
         # Verify keyless cosign signature if a .sig/.cert pair is present.
+        sig_present=false
         if [ -f "${tmp}/${asset}.sig" ] && [ -f "${tmp}/${asset}.cert" ]; then
+          sig_present=true
+        fi
+        if [ "${VERIFY_SIGNATURES}" = "true" ] && [ "${sig_present}" != "true" ]; then
+          echo "::error::signature verification required but .sig/.cert missing for ${asset}"; exit 1
+        fi
+        if [ "${sig_present}" = "true" ]; then
           if command -v cosign >/dev/null 2>&1; then
             cosign verify-blob \
               --signature "${tmp}/${asset}.sig" \
@@ -153,6 +165,8 @@ runs:
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
               "${tmp}/${asset}" 2>&1
             echo "cosign signature ok: ${asset}"
+          elif [ "${VERIFY_SIGNATURES}" = "true" ]; then
+            echo "::error::signature verification required but cosign is not installed"; exit 1
           else
             echo "::warning::cosign not installed; skipping signature verification for ${asset}"
           fi
