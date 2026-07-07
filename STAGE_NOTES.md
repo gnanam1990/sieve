@@ -136,14 +136,24 @@ Executed after the Stages 5–9 batch.
   planted issues were identical. This is expected behavior for the current
   fingerprint scheme; it was documented in `README.md` as a hosted-model caveat
   rather than changed pre-launch.
-- [ ] **Documentation finalized** — `README.md` updated with Kimi provider
+- [x] **Documentation finalized** — `README.md` updated with Kimi provider
   section and calibration table row; this section in `STAGE_NOTES.md` populated.
-- [ ] **Commit + push launch-prep changes** — pending below.
-- [ ] **Tag `v0.1.0` and push** — trigger release workflow.
-- [ ] **Verify release artifacts** — binaries, checksums, raw assets, `v0`
-  floating tag, Homebrew formula pushed to `gnanam1990/homebrew-tap`.
-- [ ] **Post-release smoke test** — `sieve review` via the published binary or
-  `@v0` action on a sandbox PR.
+- [x] **Commit + push launch-prep changes** — pushed commit `59e2e18` to `main`.
+- [x] **Tag `v0.1.0` and push** — tag pushed; release workflow run
+  `28838824460` completed (test 1m19s + release 1m14s).
+- [x] **Verify release artifacts** — GitHub release `v0.1.0` published with
+  4 platform tarballs + 4 raw binaries + `checksums.txt`. Floating tag `v0`
+  moved to the VERSION-pin commit `d38448b` (child of `v0.1.0` commit
+  `59e2e18`). Homebrew cask `Casks/sieve.rb` pushed to
+  `gnanam1990/homebrew-tap` (commit "Brew cask update for sieve version
+  v0.1.0").
+- [x] **Post-release smoke test** — downloaded
+  `sieve_0.1.0_darwin_arm64.tar.gz`, extracted binary reports
+  `sieve 0.1.0 commit:59e2e18`, and `sieve review --dry-run` against sandbox
+  PR `gnanam1990/sieve-sandbox-recall-kimi-2026-07-07#1` successfully fetched
+  PR metadata and emitted the context JSON. A live `--post` run was not
+  repeated because `KIMI_API_KEY` is not present in the current shell; the
+  earlier pre-tag hosted recall gate already validated `--post` end-to-end.
 
 ---
 
