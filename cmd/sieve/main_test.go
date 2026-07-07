@@ -439,6 +439,109 @@ func TestIgnoreCLI(t *testing.T) {
 	}
 }
 
+// writeStoreEvents writes JSONL events into the local outcome store for owner/name.
+func writeStoreEvents(t *testing.T, owner, name string, events ...string) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	storeDir := filepath.Join(dir, "sieve", "github.com", owner, name)
+	if err := os.MkdirAll(storeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(storeDir, "events.jsonl")
+	if err := os.WriteFile(path, []byte(strings.Join(events, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIgnoreSuggestNoSignals(t *testing.T) {
+	writeStoreEvents(t, "o", "r")
+	var out, errOut bytes.Buffer
+	if code := run([]string{"ignore", "--suggest", "--repo", "o/r"}, &out, &errOut); code != exitOK {
+		t.Fatalf("suggest exit %d; stderr:\n%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "no ignore suggestions") {
+		t.Fatalf("expected no-suggestions message, got:\n%s", out.String())
+	}
+}
+
+func TestIgnoreSuggest(t *testing.T) {
+	writeStoreEvents(t, "o", "r",
+		`{"type":"finding","fp":"fp11111111111111","path":"pkg/foo.go","sev":"major","cat":"bug","title":"nil dereference"}`,
+		`{"type":"dismissed","fp":"fp11111111111111"}`,
+		`{"type":"finding","fp":"fp22222222222222","path":"pkg/gen/a.pb.go","sev":"nit","cat":"style","title":"generated code lacks docs"}`,
+		`{"type":"finding","fp":"fp33333333333333","path":"pkg/gen/b.pb.go","sev":"nit","cat":"style","title":"generated code too long"}`,
+		`{"type":"dismissed","fp":"fp22222222222222"}`,
+		`{"type":"dismissed","fp":"fp33333333333333"}`,
+	)
+	var out, errOut bytes.Buffer
+	if code := run([]string{"ignore", "--suggest", "--repo", "o/r"}, &out, &errOut); code != exitOK {
+		t.Fatalf("suggest exit %d; stderr:\n%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "[0]") {
+		t.Fatalf("expected numbered suggestions, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "fingerprint: fp11111111111111") {
+		t.Fatalf("expected fingerprint suggestion, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "path: pkg/gen/**") {
+		t.Fatalf("expected grouped path suggestion, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "Run `sieve ignore --apply-suggestion N --repo o/r`") {
+		t.Fatalf("expected apply hint, got:\n%s", out.String())
+	}
+}
+
+func TestIgnoreApplySuggestion(t *testing.T) {
+	dir := t.TempDir()
+	ignorePath := filepath.Join(dir, ".sieve", "ignore.yml")
+	writeStoreEvents(t, "o", "r",
+		`{"type":"finding","fp":"fp11111111111111","path":"pkg/foo.go","sev":"major","cat":"bug","title":"nil dereference"}`,
+		`{"type":"dismissed","fp":"fp11111111111111"}`,
+	)
+	var out, errOut bytes.Buffer
+	if code := run([]string{"ignore", "--apply-suggestion", "0", "--repo", "o/r", "--file", ignorePath}, &out, &errOut); code != exitOK {
+		t.Fatalf("apply exit %d; stderr:\n%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "applied suggestion 0") {
+		t.Fatalf("expected applied message, got:\n%s", out.String())
+	}
+	data, err := os.ReadFile(ignorePath) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "fingerprint: fp11111111111111") {
+		t.Fatalf("ignore file missing fingerprint rule:\n%s", content)
+	}
+	if !strings.Contains(content, "expires:") {
+		t.Fatalf("expected default expiry, got:\n%s", content)
+	}
+
+	// Apply with --no-expiry; the rule should have no expires field.
+	ignorePath2 := filepath.Join(dir, ".sieve", "ignore2.yml")
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"ignore", "--apply-suggestion", "0", "--repo", "o/r", "--file", ignorePath2, "--no-expiry"}, &out, &errOut); code != exitOK {
+		t.Fatalf("apply no-expiry exit %d; stderr:\n%s", code, errOut.String())
+	}
+	data2, err := os.ReadFile(ignorePath2) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data2), "expires:") {
+		t.Fatalf("--no-expiry should omit expires field, got:\n%s", string(data2))
+	}
+}
+
+func TestIgnoreSuggestRequiresRepo(t *testing.T) {
+	t.Setenv("GITHUB_REPOSITORY", "")
+	var out, errOut bytes.Buffer
+	if code := run([]string{"ignore", "--suggest"}, &out, &errOut); code != exitError {
+		t.Fatalf("suggest without repo must error, got %d", code)
+	}
+}
+
 func TestSyncCLI(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

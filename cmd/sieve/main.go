@@ -21,6 +21,7 @@ import (
 	"github.com/gnanam1990/sieve/internal/config"
 	"github.com/gnanam1990/sieve/internal/gh"
 	"github.com/gnanam1990/sieve/internal/ignore"
+	"github.com/gnanam1990/sieve/internal/ignore/suggest"
 	"github.com/gnanam1990/sieve/internal/local"
 	"github.com/gnanam1990/sieve/internal/memory"
 	"github.com/gnanam1990/sieve/internal/review"
@@ -453,30 +454,43 @@ func runStats(args []string, stdout, stderr io.Writer) int {
 }
 
 // runIgnore adds a suppression rule to .sieve/ignore.yml in the current
-// worktree. It never commits — the maintainer reviews and commits the change.
+// worktree, or prints/applies suggestions derived from negative outcomes.
+// It never commits — the maintainer reviews and commits the change.
 func runIgnore(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("ignore", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
-		fp       = fs.String("fingerprint", "", "exact sieve fingerprint to ignore")
-		path     = fs.String("path", "", "path glob pattern (e.g. 'vendor/**' or '**/*.pb.go')")
-		category = fs.String("category", "", "finding category to ignore (bug|security|perf|correctness|test|style)")
-		severity = fs.String("severity", "", "severity to ignore (critical|major|minor|nit)")
-		title    = fs.String("title", "", "substring match against finding titles")
-		reason   = fs.String("reason", "", "human note explaining the rule")
-		expires  = fs.String("expires", "", "expiration date YYYY-MM-DD")
-		file     = fs.String("file", ignore.DefaultFile, "ignore file path")
-		debug    = fs.Bool("debug", false, "debug logging")
+		fp          = fs.String("fingerprint", "", "exact sieve fingerprint to ignore")
+		path        = fs.String("path", "", "path glob pattern (e.g. 'vendor/**' or '**/*.pb.go')")
+		category    = fs.String("category", "", "finding category to ignore (bug|security|perf|correctness|test|style)")
+		severity    = fs.String("severity", "", "severity to ignore (critical|major|minor|nit)")
+		title       = fs.String("title", "", "substring match against finding titles")
+		reason      = fs.String("reason", "", "human note explaining the rule")
+		expires     = fs.String("expires", "", "expiration date YYYY-MM-DD")
+		file        = fs.String("file", ignore.DefaultFile, "ignore file path")
+		repo        = fs.String("repo", "", "repository as owner/name (default: $GITHUB_REPOSITORY); used by --suggest/--apply-suggestion")
+		suggestFlag = fs.Bool("suggest", false, "print ignore-rule suggestions from negative outcomes")
+		applyIdx    = fs.Int("apply-suggestion", -1, "append the Nth suggested rule to the ignore file")
+		noExpiry    = fs.Bool("no-expiry", false, "disable the default 90-day expiration on suggested rules")
+		debug       = fs.Bool("debug", false, "debug logging")
 	)
 	if err := fs.Parse(args); err != nil {
 		return exitError
 	}
+
+	logger := newLogger(stderr, *debug)
+
+	if *suggestFlag {
+		return runIgnoreSuggest(stdout, stderr, *repo, logger)
+	}
+	if *applyIdx >= 0 {
+		return runIgnoreApply(stdout, stderr, *repo, *file, *applyIdx, *noExpiry, logger)
+	}
+
 	if *fp == "" && *path == "" && *category == "" && *severity == "" && *title == "" {
 		fmt.Fprintln(stderr, "error: ignore needs at least one of --fingerprint, --path, --category, --severity, --title")
 		return exitError
 	}
-
-	logger := newLogger(stderr, *debug)
 
 	rule := ignore.Rule{
 		Fingerprint: *fp,
@@ -506,14 +520,147 @@ func runIgnore(args []string, stdout, stderr io.Writer) int {
 	}
 	rules, _ = rules.Add(rule)
 
-	if err := os.MkdirAll(filepath.Dir(*file), 0o755); err != nil { //nolint:gosec // worktree dir
+	if err := writeIgnoreFile(*file, manual, rules, hasMarker); err != nil {
 		fmt.Fprintln(stderr, "error:", err)
 		return exitError
 	}
-	f, err := os.Create(*file)
+	fmt.Fprintf(stdout, "added rule to %s\n", *file)
+	return exitOK
+}
+
+// runIgnoreSuggest prints concrete ignore-rule proposals from the local outcome
+// store. It is read-only.
+func runIgnoreSuggest(stdout, stderr io.Writer, repo string, log *slog.Logger) int {
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok || owner == "" || name == "" {
+		if r := gh.RepoFromEnv(); r != "" {
+			owner, name, ok = strings.Cut(r, "/")
+		}
+	}
+	if !ok || owner == "" || name == "" {
+		fmt.Fprintln(stderr, "error: --suggest needs --repo owner/name (or $GITHUB_REPOSITORY)")
+		return exitError
+	}
+
+	store := memory.Open("github.com", owner, name, log)
+	events, corrupt, err := store.Read()
 	if err != nil {
 		fmt.Fprintln(stderr, "error:", err)
 		return exitError
+	}
+	if corrupt > 0 {
+		fmt.Fprintf(stderr, "warning: skipped %d corrupt event line(s)\n", corrupt)
+	}
+
+	sugs := suggest.FromEvents(events, time.Now())
+	if len(sugs) == 0 {
+		fmt.Fprintln(stdout, "no ignore suggestions")
+		return exitOK
+	}
+
+	fmt.Fprintf(stdout, "%d suggestion(s) from %s:\n\n", len(sugs), repo)
+	for i, s := range sugs {
+		fmt.Fprintf(stdout, "[%d] ", i)
+		if s.Rule.Fingerprint != "" {
+			fmt.Fprintf(stdout, "fingerprint: %s\n", s.Rule.Fingerprint)
+		} else {
+			first := true
+			if s.Rule.Path != "" {
+				fmt.Fprintf(stdout, "path: %s", s.Rule.Path)
+				first = false
+			}
+			if s.Rule.Category != "" {
+				if !first {
+					fmt.Fprint(stdout, ", ")
+				}
+				fmt.Fprintf(stdout, "category: %s", s.Rule.Category)
+				first = false
+			}
+			if s.Rule.Title != "" {
+				if !first {
+					fmt.Fprint(stdout, ", ")
+				}
+				fmt.Fprintf(stdout, "title: %s", s.Rule.Title)
+			}
+			fmt.Fprintln(stdout)
+		}
+		fmt.Fprintf(stdout, "    reason: %s\n", s.Rule.Reason)
+		if !s.Rule.Expires.IsZero() {
+			fmt.Fprintf(stdout, "    expires: %s\n", s.Rule.Expires.Format("2006-01-02"))
+		}
+		fmt.Fprintln(stdout)
+	}
+	fmt.Fprintf(stdout, "Run `sieve ignore --apply-suggestion N --repo %s` to append one.\n", repo)
+	return exitOK
+}
+
+// runIgnoreApply appends the Nth suggested rule to the worktree ignore file.
+func runIgnoreApply(stdout, stderr io.Writer, repo, file string, idx int, noExpiry bool, log *slog.Logger) int {
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok || owner == "" || name == "" {
+		if r := gh.RepoFromEnv(); r != "" {
+			owner, name, ok = strings.Cut(r, "/")
+		}
+	}
+	if !ok || owner == "" || name == "" {
+		fmt.Fprintln(stderr, "error: --apply-suggestion needs --repo owner/name (or $GITHUB_REPOSITORY)")
+		return exitError
+	}
+
+	store := memory.Open("github.com", owner, name, log)
+	events, corrupt, err := store.Read()
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	if corrupt > 0 {
+		fmt.Fprintf(stderr, "warning: skipped %d corrupt event line(s)\n", corrupt)
+	}
+
+	sugs := suggest.FromEvents(events, time.Now())
+	if idx >= len(sugs) {
+		fmt.Fprintf(stderr, "error: suggestion index %d out of range (0..%d)\n", idx, len(sugs)-1)
+		return exitError
+	}
+	if idx < 0 {
+		fmt.Fprintln(stderr, "error: --apply-suggestion index must be >= 0")
+		return exitError
+	}
+
+	rule := sugs[idx].Rule
+	if noExpiry {
+		rule.Expires = time.Time{}
+	}
+
+	manual, managed, hasMarker, err := readIgnoreFile(file, log)
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	rules, err := ignore.Parse([]byte(managed))
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	rules, _ = rules.Add(rule)
+
+	if err := writeIgnoreFile(file, manual, rules, hasMarker); err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	fmt.Fprintf(stdout, "applied suggestion %d to %s\n", idx, file)
+	return exitOK
+}
+
+// writeIgnoreFile writes an ignore rule set while preserving the hand-written
+// preamble above the sieve marker.
+func writeIgnoreFile(path string, manual string, rules ignore.Rules, hasMarker bool) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { //nolint:gosec // worktree dir
+		return err
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
 	}
 	defer f.Close() //nolint:errcheck // best-effort
 
@@ -524,12 +671,7 @@ func runIgnore(args []string, stdout, stderr io.Writer) int {
 	if hasMarker || strings.TrimSpace(manual) != "" {
 		fmt.Fprintln(f, ignore.Marker)
 	}
-	if err := rules.WriteYAML(f); err != nil {
-		fmt.Fprintln(stderr, "error:", err)
-		return exitError
-	}
-	fmt.Fprintf(stdout, "added rule to %s\n", *file)
-	return exitOK
+	return rules.WriteYAML(f)
 }
 
 // readIgnoreFile splits a .sieve/ignore.yml into a hand-written preamble and the
@@ -588,6 +730,8 @@ usage:
   sieve learnings --repo owner/name                 draft repo rules from outcomes -> .sieve/learnings.md
   sieve stats --repo owner/name [--json]            per-category addressed-rate + reactions
   sieve ignore --fingerprint FP                     add a suppression rule to .sieve/ignore.yml
+  sieve ignore --suggest --repo owner/name          print ignore-rule proposals from negative outcomes
+  sieve ignore --apply-suggestion N --repo owner/name  append the Nth proposal to .sieve/ignore.yml
   sieve serve --config /etc/sieve/server.yml        run the self-host daemon (webhooks + App auth)
   sieve admin --url URL --secret-env VAR            query a daemon's /admin endpoint
   sieve version                                     print version
@@ -608,14 +752,18 @@ review flags:
   --debug      debug logging
 
 ignore flags:
-  --fingerprint  exact sieve fingerprint to ignore
-  --path         path glob pattern (e.g. 'vendor/**' or '**/*.pb.go')
-  --category     finding category to ignore
-  --severity     severity to ignore
-  --title        substring match against finding titles
-  --reason       human note explaining the rule
-  --expires      expiration date YYYY-MM-DD
-  --file         ignore file path (default: .sieve/ignore.yml)
+  --fingerprint       exact sieve fingerprint to ignore
+  --path             path glob pattern (e.g. 'vendor/**' or '**/*.pb.go')
+  --category         finding category to ignore
+  --severity         severity to ignore
+  --title            substring match against finding titles
+  --reason           human note explaining the rule
+  --expires          expiration date YYYY-MM-DD
+  --file             ignore file path (default: .sieve/ignore.yml)
+  --repo             repository as owner/name for --suggest/--apply-suggestion
+  --suggest          print ignore-rule proposals from the local outcome store
+  --apply-suggestion append the Nth suggested rule to --file
+  --no-expiry        disable the default 90-day expiry on suggested rules
 
 exit codes: 0 ok · 1 error · 2 partial (truncated input, failed batch, or a
 failed inline comment post)

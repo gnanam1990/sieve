@@ -118,14 +118,14 @@ func clampU64ToInt(v uint64, limit int) int {
 	if limit < 0 {
 		limit = 0
 	}
-	m := uint64(limit)
+	m := uint64(limit) //nolint:gosec // bounded after limit >= 0 check
 	if v > m {
 		v = m
 	}
 	if v > uint64(math.MaxInt) {
 		v = uint64(math.MaxInt)
 	}
-	return int(v)
+	return int(v) //nolint:gosec // bounded to MaxInt before conversion
 }
 
 func lineOf(src []byte, offset uint64) int {
