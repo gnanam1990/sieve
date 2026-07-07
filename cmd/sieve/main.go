@@ -4,14 +4,18 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"text/tabwriter"
+	"time"
 
 	"github.com/gnanam1990/sieve/internal/config"
 	"github.com/gnanam1990/sieve/internal/gh"
@@ -20,6 +24,7 @@ import (
 	"github.com/gnanam1990/sieve/internal/sarif"
 	"github.com/gnanam1990/sieve/internal/server"
 	"github.com/gnanam1990/sieve/internal/version"
+	"github.com/gnanam1990/sieve/internal/webhook"
 )
 
 const (
@@ -48,6 +53,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runStats(args[1:], stdout, stderr)
 	case "serve":
 		return runServe(args[1:], stdout, stderr)
+	case "admin":
+		return runAdmin(args[1:], stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, version.Info())
 		return exitOK
@@ -159,6 +166,69 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 	}
 	if rc.Truncated || rc.Stats.BatchesFailed > 0 || rc.Stats.InlinePostFailed > 0 {
 		return exitPartial
+	}
+	return exitOK
+}
+
+// runAdmin queries a running sieve daemon's /admin endpoint.
+func runAdmin(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("admin", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	url := fs.String("url", "http://127.0.0.1:8787/admin", "daemon /admin URL")
+	secretEnv := fs.String("secret-env", "SIEVE_ADMIN_SECRET", "env var holding the admin password")
+	if err := fs.Parse(args); err != nil {
+		return exitError
+	}
+	secret := os.Getenv(*secretEnv)
+	if secret == "" {
+		fmt.Fprintf(stderr, "error: %s is unset\n", *secretEnv)
+		return exitError
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, *url, nil)
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	req.SetBasicAuth("admin", secret)
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Fprintf(stderr, "error: %s\n%s\n", resp.Status, body)
+		return exitError
+	}
+	var stats webhook.AdminStats
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+
+	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(tw, "Version:\t%s\n", stats.Version)
+	fmt.Fprintf(tw, "Uptime (s):\t%.0f\n", stats.UptimeSeconds)
+	fmt.Fprintf(tw, "Queue depth:\t%d\n", stats.QueueDepth)
+	fmt.Fprintf(tw, "Dead letters:\t%d\n", stats.DeadLetters)
+	fmt.Fprintf(tw, "Running jobs:\t%d\n", len(stats.Running))
+	fmt.Fprintf(tw, "Recent dead:\t%d\n", len(stats.RecentDead))
+	_ = tw.Flush()
+
+	if len(stats.Running) > 0 {
+		fmt.Fprintln(stdout, "\nRunning:")
+		for _, r := range stats.Running {
+			fmt.Fprintf(stdout, "  %s\n", r)
+		}
+	}
+	if len(stats.RecentDead) > 0 {
+		fmt.Fprintln(stdout, "\nRecent dead letters:")
+		for _, d := range stats.RecentDead {
+			fmt.Fprintf(stdout, "  %s#%d @ %s  attempts=%d  err=%q\n", d.Repo, d.PR, d.Timestamp.Format(time.RFC3339), d.Attempts, d.Error)
+		}
 	}
 	return exitOK
 }
@@ -395,6 +465,7 @@ usage:
   sieve learnings --repo owner/name                 draft repo rules from outcomes -> .sieve/learnings.md
   sieve stats --repo owner/name [--json]            per-category addressed-rate + reactions
   sieve serve --config /etc/sieve/server.yml        run the self-host daemon (webhooks + App auth)
+  sieve admin --url URL --secret-env VAR            query a daemon's /admin endpoint
   sieve version                                     print version
 
 review flags:

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gnanam1990/sieve/internal/webhook"
 )
 
 // writeFakeFixture writes a fake-provider config whose fixture yields one valid
@@ -331,6 +334,49 @@ func TestStatsRequiresRepo(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run([]string{"stats"}, &out, &errOut); code != exitError {
 		t.Fatalf("stats without repo must error, got %d", code)
+	}
+}
+
+func TestAdminCLI(t *testing.T) {
+	stats := webhook.AdminStats{
+		Version:       "v-test",
+		UptimeSeconds: 42,
+		QueueDepth:    3,
+		DeadLetters:   1,
+		Running:       []string{"o/r#7"},
+		RecentDead:    nil,
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/admin" {
+			http.NotFound(w, r)
+			return
+		}
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "admin" || pass != "secret" {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(stats)
+	}))
+	defer srv.Close()
+
+	t.Setenv("TEST_ADMIN_SECRET", "secret")
+	var out, errOut bytes.Buffer
+	code := run([]string{"admin", "--url", srv.URL + "/admin", "--secret-env", "TEST_ADMIN_SECRET"}, &out, &errOut)
+	if code != exitOK {
+		t.Fatalf("admin exit %d; stderr:\n%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "Version:") || !strings.Contains(out.String(), "o/r#7") {
+		t.Fatalf("admin output wrong:\n%s", out.String())
+	}
+
+	// Missing secret.
+	out.Reset()
+	errOut.Reset()
+	t.Setenv("TEST_ADMIN_SECRET", "")
+	code = run([]string{"admin", "--url", srv.URL + "/admin", "--secret-env", "TEST_ADMIN_SECRET"}, &out, &errOut)
+	if code != exitError {
+		t.Fatalf("admin without secret must error, got %d", code)
 	}
 }
 

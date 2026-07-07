@@ -33,8 +33,12 @@ var enqueueActions = map[string]bool{
 
 // AdminStats exposes queue runtime details for the /admin endpoint.
 type AdminStats struct {
-	Running    []string
-	RecentDead []queue.DeadRecord
+	Version      string           `json:"version"`
+	UptimeSeconds float64         `json:"uptime_seconds"`
+	QueueDepth    int              `json:"queue_depth"`
+	DeadLetters   int              `json:"dead_letters"`
+	Running       []string         `json:"running"`
+	RecentDead    []queue.DeadRecord `json:"recent_dead"`
 }
 
 // AdminSource returns the current admin-visible runtime details.
@@ -288,15 +292,15 @@ func (h *Handler) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	stats := h.cfg.AdminStats()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"version":           h.cfg.Version,
-		"uptime_seconds":    time.Since(h.startTime).Seconds(),
-		"queue_depth":       depth,
-		"dead_letters":      dead,
-		"running":           stats.Running,
-		"recent_dead":       stats.RecentDead,
-		"rejected_webhooks": h.rejected.Load(),
-	})
+	admin := AdminStats{
+		Version:       h.cfg.Version,
+		UptimeSeconds: time.Since(h.startTime).Seconds(),
+		QueueDepth:    depth,
+		DeadLetters:   dead,
+		Running:       stats.Running,
+		RecentDead:    stats.RecentDead,
+	}
+	_ = json.NewEncoder(w).Encode(admin)
 }
 
 // sanitize replaces any character a slog text-handler would pass through verbatim
