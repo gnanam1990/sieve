@@ -188,7 +188,7 @@ func TestBuildLocalDryRun(t *testing.T) {
 func initGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	runGit(t, dir, "init")
+	runGit(t, dir, "init", "--initial-branch=main")
 	runGit(t, dir, "config", "user.email", "local@example.com")
 	runGit(t, dir, "config", "user.name", "Local User")
 	return dir

@@ -137,6 +137,7 @@ func gitUser(dir string) string {
 }
 
 func git(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	//nolint:gosec // G204: git arguments are built by internal callers, not raw user input.
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	out, err := cmd.Output()

@@ -537,11 +537,13 @@ func runIgnore(args []string, stdout, stderr io.Writer) int {
 func readIgnoreFile(path string, log *slog.Logger) (manual, managed string, hasMarker bool, err error) {
 	data, err := os.ReadFile(path) //nolint:gosec // worktree path
 	if os.IsNotExist(err) {
+		log.Debug("ignore file not found", "path", path)
 		return "", "", false, nil
 	}
 	if err != nil {
 		return "", "", false, err
 	}
+	log.Debug("loaded ignore file", "path", path, "bytes", len(data))
 	body := string(data)
 	idx := strings.Index(body, ignore.Marker)
 	if idx < 0 {
