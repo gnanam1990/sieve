@@ -171,8 +171,10 @@ Executed after the Stages 5–9 batch.
   `Verified OK` for both `sieve_darwin_arm64` and `checksums.txt`, with the
   certificate identity matching the `release.yml` workflow at `refs/tags/v0.1.1-rc1`
   and OIDC issuer `https://token.actions.githubusercontent.com`.
-- [ ] **Ship v0.1.1 stable** — once this is approved, tag `v0.1.1` on `main` to
-  move `v0` and publish signed stable artifacts + the Homebrew cask.
+- [x] **Ship v0.1.1 stable** — tagged `v0.1.1` on `main`; release workflow
+  `28839436376` completed. Release has 27 assets (8 binaries/tarballs + checksums
+  + 18 cosign `.sig`/`.cert` files). Floating tag `v0` moved to the VERSION-pin
+  commit `df1dbecc`. Homebrew tap `Casks/sieve.rb` updated to v0.1.1.
 
 ---
 
