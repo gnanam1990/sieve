@@ -67,6 +67,7 @@ provider:
   api_key_env: KIMI_API_KEY
   timeout_seconds: 300
   max_tokens: 4096
+  temperature: 1
 YAML
   elif [[ -n "${OLLAMA_API_KEY:-}" ]]; then
     cat <<YAML
