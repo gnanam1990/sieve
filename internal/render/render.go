@@ -8,6 +8,7 @@ import (
 
 	"github.com/gnanam1990/sieve/internal/findings"
 	"github.com/gnanam1990/sieve/internal/gate"
+	"github.com/gnanam1990/sieve/internal/ignore/suggest"
 )
 
 // MaxCommentBytes is GitHub's hard limit on a comment body. The walkthrough is
@@ -44,6 +45,7 @@ type WalkthroughInput struct {
 	Pipeline      string      // "judge"/"ensemble" shown in the footer; "" or "single" hidden
 	RoleTokens    []RoleToken // per-role token breakdown (multi-model pipelines)
 	Version       string
+	Suggestions   []suggest.Suggestion
 }
 
 // RoleToken is one pipeline role's token usage, for the footer breakdown.
@@ -54,10 +56,11 @@ type RoleToken struct {
 }
 
 type truncFlags struct {
-	notes    bool
-	resolved bool
-	skipped  bool
-	ignored  bool
+	notes       bool
+	resolved    bool
+	skipped     bool
+	ignored     bool
+	suggestions bool
 }
 
 // Walkthrough renders the full walkthrough body, shrinking it under
@@ -71,6 +74,7 @@ func Walkthrough(in WalkthroughInput) string {
 		{notes: true, resolved: true},
 		{notes: true, resolved: true, skipped: true},
 		{notes: true, resolved: true, skipped: true, ignored: true},
+		{notes: true, resolved: true, skipped: true, ignored: true, suggestions: true},
 	} {
 		body := build(in, tr)
 		if len(body) <= MaxCommentBytes {
@@ -80,7 +84,7 @@ func Walkthrough(in WalkthroughInput) string {
 	// Even fully truncated the essentials exceed the cap (pathological): return
 	// the smallest form anyway — the metadata block is intact, which is what
 	// cross-run dedupe depends on.
-	return build(in, truncFlags{notes: true, resolved: true, skipped: true, ignored: true})
+	return build(in, truncFlags{notes: true, resolved: true, skipped: true, ignored: true, suggestions: true})
 }
 
 func build(in WalkthroughInput, tr truncFlags) string {
@@ -118,6 +122,10 @@ func build(in WalkthroughInput, tr truncFlags) string {
 	if ignoredCount > 0 {
 		b.WriteString("\n")
 		b.WriteString(ignoredSection(in.Ignored, tr.ignored))
+	}
+	if len(in.Suggestions) > 0 {
+		b.WriteString("\n")
+		b.WriteString(suggestionsSection(in.Suggestions, tr.suggestions))
 	}
 
 	extra := ""
@@ -201,6 +209,36 @@ func ignoredSection(ignored []gate.Finding, truncated bool) string {
 		for _, f := range ignored {
 			fmt.Fprintf(&b, "- %s · %s (`%s`)\n", sevMarker[f.Severity], f.Title, where(f.Finding))
 		}
+	}
+	b.WriteString("\n</details>\n")
+	return b.String()
+}
+
+func suggestionsSection(sugs []suggest.Suggestion, truncated bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "<details><summary>💡 Suggested ignore rules (%d)</summary>\n\n", len(sugs))
+	if truncated {
+		fmt.Fprintf(&b, "…and %d more suggestions — see JSON output\n", len(sugs))
+	} else {
+		for i, s := range sugs {
+			fmt.Fprintf(&b, "- %s\n", s.Rule.Reason)
+			if s.Rule.Fingerprint != "" {
+				fmt.Fprintf(&b, "  `%d` fingerprint: `%s`\n", i, s.Rule.Fingerprint)
+			} else {
+				parts := []string{}
+				if s.Rule.Path != "" {
+					parts = append(parts, fmt.Sprintf("path: `%s`", s.Rule.Path))
+				}
+				if s.Rule.Category != "" {
+					parts = append(parts, fmt.Sprintf("category: `%s`", s.Rule.Category))
+				}
+				if s.Rule.Title != "" {
+					parts = append(parts, fmt.Sprintf("title: `%s`", s.Rule.Title))
+				}
+				fmt.Fprintf(&b, "  `%d` %s\n", i, strings.Join(parts, ", "))
+			}
+		}
+		b.WriteString("\nApply with: `sieve ignore --suggest --repo owner/name`\n")
 	}
 	b.WriteString("\n</details>\n")
 	return b.String()

@@ -17,6 +17,7 @@ import (
 	"github.com/gnanam1990/sieve/internal/incremental"
 	"github.com/gnanam1990/sieve/internal/local"
 	"github.com/gnanam1990/sieve/internal/memory"
+	"github.com/gnanam1990/sieve/internal/ignore/suggest"
 	"github.com/gnanam1990/sieve/internal/post"
 	"github.com/gnanam1990/sieve/internal/render"
 	"github.com/gnanam1990/sieve/internal/version"
@@ -116,6 +117,17 @@ func gateAndPost(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg 
 	}
 
 	meta := gate.BuildMeta(rc.HeadSHA, opts.now(), res.ActiveCompact(cids), loc.Meta.Resolved, fpsOf(res.Resolved))
+
+	// Record outcomes to the local store (best-effort, never fails a review).
+	owner, name, _ := strings.Cut(rc.Repo, "/")
+	store := memory.Open(memoryHost, owner, name, opts.Log)
+	recordOutcomes(store, rc, res, plan, ghComments, threads, modelLabel(cfg), opts.now())
+
+	var suggestions []suggest.Suggestion
+	if opts.Post {
+		suggestions = suggest.FromEvents(storeEvents(store), time.Now())
+	}
+
 	walkthrough := render.Walkthrough(render.WalkthroughInput{
 		Result:        res,
 		Meta:          meta,
@@ -131,20 +143,24 @@ func gateAndPost(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg 
 		Pipeline:      cfg.Review.Pipeline,
 		RoleTokens:    roleTokensForRender(cfg, rc.Stats),
 		Version:       version.Version,
+		Suggestions:   suggestions,
 	})
 	if err := poster.UpsertWalkthrough(ctx, loc, walkthrough); err != nil {
 		return err
 	}
 
-	// Record outcomes to the local store (best-effort, never fails a review).
-	owner, name, _ := strings.Cut(rc.Repo, "/")
-	store := memory.Open(memoryHost, owner, name, opts.Log)
-	recordOutcomes(store, rc, res, plan, ghComments, threads, modelLabel(cfg), opts.now())
 	return nil
 }
 
 // memoryHost is the store host segment. sieve targets github.com only today.
 const memoryHost = "github.com"
+
+// storeEvents reads the local outcome store for host/owner/repo. Best-effort:
+// a missing or unreadable store returns nil.
+func storeEvents(store *memory.Store) []memory.Event {
+	events, _, _ := store.Read()
+	return events
+}
 
 // ignoreFetcher resolves .sieve/ignore.yml from the local worktree or from
 // GitHub contents at the review head.
