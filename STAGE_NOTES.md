@@ -180,10 +180,17 @@ Executed after the Stages 5–9 batch.
 - [x] **Post-release smoke test** — downloaded
   `sieve_0.2.0_darwin_arm64.tar.gz`; `sha256sum --check` passed; extracted
   binary reports `sieve 0.2.0 commit:9608728`.
-  PR `gnanam1990/sieve-sandbox-recall-kimi-2026-07-07#1` successfully fetched
-  PR metadata and emitted the context JSON. A live `--post` run was not
-  repeated because `KIMI_API_KEY` is not present in the current shell; the
-  earlier pre-tag hosted recall gate already validated `--post` end-to-end.
+- [x] **Post-release follow-up fixes** — after v0.2.0 shipped, CI on the
+  dependabot action-bump PRs exposed two issues:
+  1. `internal/prompt/prompt.go:142` used `cap` as a parameter name; newer
+     `golangci-lint` flagged it as a builtin redefinition. Renamed to
+     `maxTokens` and pushed as `5de30ea`.
+  2. `TestMetricsEndpoint` had a race under `-race -shuffle=on`: it scraped
+     `/metrics` before `runReview` recorded the counter. Fixed by polling the
+     endpoint until the expected counter appears (`fa41f99`).
+- [x] **Dependabot action bumps merged** — #10 (golangci-lint-action 8→9),
+  #11 (setup-go 5→6), #13 (goreleaser-action 6→7) merged. #12 (checkout 4→7)
+  had merge conflicts and was superseded by direct commit `a061abb`.
 
 ---
 
