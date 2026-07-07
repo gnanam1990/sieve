@@ -14,7 +14,8 @@
 #   - gh CLI authenticated (gh auth status)
 #   - a frontier model key in the environment:
 #       ANTHROPIC_API_KEY  (uses provider.type anthropic), or
-#       OPENROUTER_API_KEY (uses provider.type openai-compat against OpenRouter)
+#       OPENROUTER_API_KEY (uses provider.type openai-compat against OpenRouter), or
+#       KIMI_API_KEY       (uses provider.type openai-compat against Kimi)
 #   - run from the repo root: scripts/sandbox_recall.sh <all|create|review|fix>
 #
 # Usage:
@@ -57,6 +58,16 @@ provider:
   api_key_env: OPENROUTER_API_KEY
   max_tokens: 4096
 YAML
+  elif [[ -n "${KIMI_API_KEY:-}" ]]; then
+    cat <<YAML
+provider:
+  type: openai-compat
+  base_url: https://api.kimi.com/coding/v1
+  model: ${SIEVE_MODEL:-kimi-for-coding}
+  api_key_env: KIMI_API_KEY
+  timeout_seconds: 300
+  max_tokens: 4096
+YAML
   elif [[ -n "${OLLAMA_API_KEY:-}" ]]; then
     cat <<YAML
 provider:
@@ -68,7 +79,7 @@ provider:
   max_tokens: 4096
 YAML
   else
-    die "set ANTHROPIC_API_KEY, OPENROUTER_API_KEY, or OLLAMA_API_KEY before running"
+    die "set ANTHROPIC_API_KEY, OPENROUTER_API_KEY, KIMI_API_KEY, or OLLAMA_API_KEY before running"
   fi
 }
 
