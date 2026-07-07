@@ -1218,14 +1218,39 @@ command, instead of forcing manual rule authoring.
 
 ## Live validation
 
-- Run `sieve learnings` on a sandbox PR with a planted low-value finding, give
-  it 👎/dismiss, then run `sieve ignore --suggest` and verify the proposed rule
-  matches the finding.
-- Open a real PR, dismiss one sieve inline comment, and confirm
-  `sieve ignore --suggest` surfaces a fingerprinted rule backed by that
-  dismissal.
-- Apply the suggestion, re-run the review, and confirm the suppressed finding
-  appears under **Ignored** in the walkthrough footer.
+- [x] **Down-vote → fingerprint suggestion → apply → ignored footer** — sandbox
+  repo `gnanam1990/sieve-sandbox-stage12-1783410905`, PR #1. The first hosted
+  Kimi run failed with an invalid JSON/EOF response, so the review was re-run
+  with local Ollama `qwen3-coder:480b-cloud`, which posted 8 inline + 2 notes.
+  A 👎 (`-1`) reaction was added to the data-race inline comment
+  (`gh api …/pulls/comments/3534647178/reactions`). After `sieve sync` recorded
+  the reaction, `sieve ignore --suggest` proposed:
+
+  ```
+  [0] fingerprint: f9eb13e0f3f98aa1
+      reason: 1 negative reaction
+      expires: 2026-10-05
+  ```
+
+  `sieve ignore --apply-suggestion 0` appended the rule to the sandbox's
+  `.sieve/ignore.yml` (committed and pushed). A full re-review (walkthrough
+  deleted first to defeat the delta carry-forward) then reported
+  **9 findings (0 dropped, 1 ignored)**. The walkthrough footer contained:
+
+  ```
+  <details><summary>Ignored by rule (1)</summary>
+
+  - 🔴 critical · concurrent map writes without synchronization (service.go:40-40)
+
+  </details>
+  ```
+
+  confirming the suppressed finding is visible and auditable.
+
+- [ ] **Dismissal → fingerprint suggestion** — pending: requires resolving a
+  sieve review thread via the GitHub UI/API. The `TypeDismissed` path is covered
+  by unit tests and by the existing `ResolvedThreads` GraphQL read used during
+  `sieve review --post` / `sieve sync`.
 
 ---
 
