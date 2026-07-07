@@ -60,6 +60,15 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - name: Create fake smoke config
+        shell: bash
+        run: |
+          printf '%s\n' '{"findings":[]}' > .sieve.fake.json
+          cat > .sieve.fake.yml <<'EOF'
+          provider:
+            type: fake
+            fixture: .sieve.fake.json
+          EOF
       - uses: ./
         with:
           provider: fake
