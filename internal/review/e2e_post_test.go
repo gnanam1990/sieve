@@ -15,6 +15,8 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/gnanam1990/sieve/internal/memory"
 )
 
 // fakeHub is a stateful in-memory GitHub for the offline --post E2E: it serves
@@ -222,5 +224,65 @@ func goldenCompareE2E(t *testing.T, path, got string) {
 	}
 	if d := cmp.Diff(string(want), got); d != "" {
 		t.Errorf("golden mismatch %s (-want +got):\n%s", path, d)
+	}
+}
+
+// TestPostedWalkthroughSuggestionFooter: when the local outcome store contains
+// a negative reaction for the reviewed finding, the --post walkthrough footer
+// renders a suggestion section. A read-only run omits it.
+func TestPostedWalkthroughSuggestionFooter(t *testing.T) {
+	hub := newFakeHub(t)
+	srv := hub.server()
+	opts := postOptions(t, srv.URL, "testdata/fake_findings.json")
+
+	// Seed the local store for this repo with a negative reaction on the finding
+	// fingerprint used by the fake fixture.
+	fp := "d891d833aceb9a2d"
+	store := memory.Open("github.com", "octo", "hello", opts.Log)
+	store.Append(memory.Event{
+		Ts:    "2026-07-05T00:00:00Z",
+		Type:  memory.TypeFinding,
+		Fp:    fp,
+		Path:  "alpha.txt",
+		Sev:   "major",
+		Conf:  0.9,
+		Cat:   "correctness",
+		Title: "Spelled-out number breaks lexical ordering",
+		Tier:  "inline",
+	})
+	store.Append(memory.Event{
+		Ts:     "2026-07-06T00:00:00Z",
+		Type:   memory.TypeReaction,
+		Fp:     fp,
+		Cid:    1,
+		Minus:  1,
+		Plus:   0,
+	})
+
+	_, err := Run(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	for _, want := range []string{
+		"💡 Suggested ignore rules (1)",
+		"1 negative reaction",
+		"`0` fingerprint: `d891d833aceb9a2d`",
+		"Apply with: `sieve ignore --suggest --repo owner/name`",
+	} {
+		if !strings.Contains(hub.lastWalkthrough, want) {
+			t.Errorf("walkthrough missing %q:\n%s", want, hub.lastWalkthrough)
+		}
+	}
+
+	// Read-only run: no suggestion section and no walkthrough stored.
+	hub.lastWalkthrough = ""
+	opts.Post = false
+	_, err = Run(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("read-only run: %v", err)
+	}
+	if hub.lastWalkthrough != "" {
+		t.Error("read-only run must not post a walkthrough")
 	}
 }

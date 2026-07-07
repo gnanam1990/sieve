@@ -651,6 +651,28 @@ The command writes to `.sieve/ignore.yml` in the current worktree and **never**
 auto-commits. It preserves any hand-written preamble above a `# sieve:ignore`
 marker. Use `--file` to target another path.
 
+### Suggested ignore rules
+
+When a maintainer down-votes a sieve inline comment or resolves its review
+thread without a fix, sieve records that signal in the local outcome store. The
+next `sieve review --post` (or daemon/Action run) surfaces a collapsible
+**Suggested ignore rules** section in the walkthrough footer with the exact CLI
+command to list them:
+
+```sh
+sieve ignore --suggest --repo owner/name
+```
+
+To apply a suggested rule to the worktree:
+
+```sh
+sieve ignore --apply-suggestion 0 --repo owner/name
+```
+
+Suggested rules default to a 90-day expiry; use `--no-expiry` to keep one
+permanent. The suggestion path is read-only — no rule is applied or committed
+automatically.
+
 Ignored findings are dropped after fingerprint decoration but before the
 confidence floor and tier routing. The walkthrough footer reports the count, and
 the CLI summary prints `ignored` separately so suppressed findings remain

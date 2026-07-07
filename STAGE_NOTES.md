@@ -1294,3 +1294,78 @@ a GitHub token, App PEM, or webhook.
 - [x] **Tests** — unit tests for `internal/local`, integration tests in
   `internal/review`, and CLI tests in `cmd/sieve` all use real temp git repos.
 - [x] **Docs** — README and `docs/self-hosting.md` describe the local workflow.
+
+---
+
+# Stage 13 — Walkthrough Suggestion Footer
+
+## Goal
+
+Make the ignore-rule suggestion loop discoverable to maintainers directly in the
+posted walkthrough. When sieve knows about negative signals for a finding, the
+footer should surface a read-only "💡 Suggested ignore rules" block with the
+exact CLI command to apply them. This keeps the loop visible without changing
+the default posting behavior or auto-applying anything.
+
+## Decisions / smallest-reasonable-choice notes
+
+- **Read-only footer only.** The walkthrough gains a collapsible suggestion
+  section; applying a rule still requires running `sieve ignore --suggest` and
+  `sieve ignore --apply-suggestion N` locally and committing the change. No
+  automatic repository writes.
+- **Compute suggestions only when `--post`.** Dry-run and local reviews are
+  deterministic and should not depend on the local memory store; the footer is a
+  posted-review affordance.
+- **Reuse `internal/ignore/suggest`.** The render path receives the same
+  `[]suggest.Suggestion` produced by the existing engine; no new signal sources.
+- **Show count + concise summary, not full YAML.** The footer lists each
+  suggestion as one line (`fingerprint: abc123 — 1 negative reaction`) and the
+  command to list them, keeping the walkthrough compact.
+- **Hide the section when there are no suggestions.** Empty affordances are
+  noise; the footer is only emitted when `len(suggestions) > 0`.
+- **Daemon/Action path gets it automatically.** Because the footer is part of the
+  shared walkthrough renderer, `sieve serve` and the GitHub Action will
+  surface suggestions without extra wiring.
+
+## Offline gates
+
+- [x] `go vet ./...` clean.
+- [x] `golangci-lint` clean.
+- [x] `make test` (`-race -shuffle=on`) green.
+- [x] `make cover` green; `internal/ignore/suggest` 97.5% (≥ 90%),
+  `internal/render` 87.0% (≥ 85%), overall 86.8% (≥ 85%).
+- [x] Tests:
+  - `internal/render` unit tests: empty suggestions omitted, fingerprint rule,
+    path/category/title rule.
+  - `internal/review` E2E: seeded negative reaction causes the `--post`
+    walkthrough footer to render the suggestion section with the apply command.
+  - No new GitHub writes beyond the existing walkthrough upsert.
+- [x] README updated with the "Suggested ignore rules" subsection under
+  "Suppressing findings".
+
+## Live validation
+
+- [x] **Walkthrough footer shows suggestion on --post** — re-used sandbox
+  `gnanam1990/sieve-sandbox-stage12-1783410905#1` after applying the two ignore
+  rules from Stage 12 live validation. A fresh `sieve review --post` run with
+  Ollama rendered the walkthrough footer containing:
+
+  ```
+  <details><summary>💡 Suggested ignore rules (2)</summary>
+
+  - 1 negative reaction
+    `0` fingerprint: `f9eb13e0f3f98aa1`
+  - 1 dismissal
+    `1` fingerprint: `964dc18e066d9466`
+
+  Apply with: `sieve ignore --suggest --repo owner/name`
+
+  </details>
+  ```
+
+  confirming the suggestion loop is visible and read-only.
+
+- [x] **Dry-run / --local do not emit the suggestion footer** — the renderer
+  only receives suggestions when `opts.Post` is true; unit tests assert the
+  section is omitted when the suggestion list is empty, and read-only runs never
+  reach the post path.

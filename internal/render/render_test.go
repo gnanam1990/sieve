@@ -4,12 +4,15 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/gnanam1990/sieve/internal/diff"
 	"github.com/gnanam1990/sieve/internal/findings"
 	"github.com/gnanam1990/sieve/internal/gate"
+	"github.com/gnanam1990/sieve/internal/ignore"
+	"github.com/gnanam1990/sieve/internal/ignore/suggest"
 )
 
 func gf(path string, line int, sev findings.Severity, conf float64, cat, title, body string) gate.Finding {
@@ -212,6 +215,63 @@ func TestFooterSinglePipelineOmitsRoleBreakdown(t *testing.T) {
 	body := Walkthrough(in)
 	if strings.Contains(body, "pipeline:") {
 		t.Errorf("single pipeline must not show a pipeline label:\n%s", body)
+	}
+}
+
+// TestSuggestionsSection: the walkthrough renders a collapsible suggestion
+// footer with count, reason, matcher summary, and the apply command. No
+// suggestion section appears when the list is empty.
+func TestSuggestionsSection(t *testing.T) {
+	rule := ignore.Rule{
+		Fingerprint: "abc123def4567890",
+		Reason:      "1 negative reaction",
+		Expires:     time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC),
+	}
+	sugs := []suggest.Suggestion{{Rule: rule}}
+
+	in := sampleInput()
+	in.Suggestions = sugs
+	body := Walkthrough(in)
+	for _, want := range []string{
+		"💡 Suggested ignore rules (1)",
+		"1 negative reaction",
+		"`0` fingerprint: `abc123def4567890`",
+		"Apply with: `sieve ignore --suggest --repo owner/name`",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("suggestion footer missing %q:\n%s", want, body)
+		}
+	}
+
+	// Empty suggestions omit the section entirely.
+	in.Suggestions = nil
+	body = Walkthrough(in)
+	if strings.Contains(body, "Suggested ignore rules") {
+		t.Error("empty suggestions must not render the section")
+	}
+}
+
+// TestSuggestionsSectionPathCategoryTitle: rules without a fingerprint render
+// path/category/title summary in the footer.
+func TestSuggestionsSectionPathCategoryTitle(t *testing.T) {
+	rule := ignore.Rule{
+		Path:     "**/*.go",
+		Category: "style",
+		Title:    "naming",
+		Reason:   "2 negative reactions in pkg/foo",
+	}
+	sugs := []suggest.Suggestion{{Rule: rule}}
+	in := sampleInput()
+	in.Suggestions = sugs
+	body := Walkthrough(in)
+	for _, want := range []string{
+		"💡 Suggested ignore rules (1)",
+		"`0` path: `**/*.go`, category: `style`, title: `naming`",
+		"2 negative reactions in pkg/foo",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("suggestion footer missing %q:\n%s", want, body)
+		}
 	}
 }
 
