@@ -38,9 +38,4 @@ jobs:
           # fine for prereleases (brews.skip_upload: auto).
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
       - name: move floating major tag and pin VERSION
-        env:
-          # v0 bootstrap: move the major tag even for the rc so @v0 resolves
-          # during Stage 4 testing. REMOVE this after the first stable v0.x.0
-          # ships, so v0 then only ever tracks stable releases.
-          MOVE_MAJOR_ON_PRERELEASE: "true"
         run: bash scripts/move_major_tag.sh "${GITHUB_REF_NAME}"
