@@ -1,0 +1,28 @@
+name: Bug report
+description: Report a problem with the sieve action or CLI
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "sieve release (e.g. v0.2.0) or commit"
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - GitHub Action
+        - CLI
+        - sieve serve (daemon)
+        - release/cosign
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: "Minimal workflow, config, and steps to reproduce"
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior

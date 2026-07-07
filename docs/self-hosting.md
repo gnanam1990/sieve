@@ -198,6 +198,59 @@ is served.
 
 ---
 
+## Quick install on a fresh Linux server
+
+Use the server installer to put the signed binary on `PATH` and then drop in
+the systemd unit above:
+
+```sh
+curl -fsSL https://sievereview.dev/install-server.sh | bash -s -- -d /usr/local/bin
+sudo mkdir -p /etc/sieve /var/lib/sieve
+# copy your GitHub App private key and /etc/sieve/server.yml, then:
+sudo systemctl enable --now sieve
+```
+
+If `cosign` is installed, the installer verifies the release signature against
+GitHub Actions OIDC. Use `-s` to skip verification, `-v v0.2.0` to pin a version.
+
+## Fly.io deployment
+
+A ready-to-use `fly.toml` is in the repo root. It builds the Go binary via the
+included `Dockerfile`, exposes `sieve serve`, and wires Fly's native Prometheus
+scraper to `/metrics`.
+
+```sh
+# once
+fly apps create sieve-serve
+# deploy
+fly deploy --dockerfile Dockerfile
+# set secrets
+fly secrets set SIEVE_WEBHOOK_SECRET=... ANTHROPIC_API_KEY=... OPENROUTER_API_KEY=...
+# upload your GitHub App private key as a secret file
+fly secrets set SIEVE_APP_PRIVATE_KEY="$(cat /path/to/app.pem)"
+```
+
+Then point your GitHub App webhook at `https://sieve-serve.fly.dev/webhook`.
+
+## Observability
+
+The daemon exposes three endpoints on the configured `listen` port:
+
+- `/webhook` — GitHub App webhooks (public via proxy).
+- `/healthz` — liveness: version, queue depth, dead-letter count.
+- `/metrics` — Prometheus text exposition of:
+  - `sieve_reviews_total{outcome,pipeline}`
+  - `sieve_review_duration_seconds_bucket/p50/p95/p99`
+  - `sieve_tokens_total{role,direction}`
+  - `sieve_queue_depth`
+  - `sieve_dead_letters`
+  - `sieve_workers`
+
+When running on Fly.io, the `[[metrics]]` block in `fly.toml` tells Fly's
+scraper to pull `/metrics`; otherwise point your Prometheus to
+`http://<host>:<port>/metrics`. All metrics use dependency-free Prometheus text
+format — no client library is required.
+
 ## Operations
 
 - **Durability / crash recovery.** `data_dir/queue.jsonl` is an append-only log;
@@ -230,5 +283,5 @@ is served.
 ## Non-goals
 
 No in-process TLS (that's the proxy's job), no multi-tenancy/billing, no web UI,
-no Docker image, no horizontal scaling — a single node is the design point. If
-you outgrow one box, run one daemon per org.
+no horizontal scaling — a single node is the design point. If you outgrow one
+box, run one daemon per org.

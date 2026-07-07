@@ -94,6 +94,11 @@ func renderFindings(fs []findings.Finding) string {
 // to keep requests comfortably inside model context windows.
 const maxBatchTokens = 24_000
 
+// maxInputTokensDefault caps batches at 24k estimated input tokens unless the
+// provider overrides it. This is a per-request guardrail independent of the
+// per-run review.max_run_tokens budget.
+var maxInputTokensDefault = maxBatchTokens
+
 // maxPRBodyBytes truncates the PR description in the prompt.
 const maxPRBodyBytes = 2 * 1024
 
@@ -128,9 +133,23 @@ type Batch struct {
 // alone gets its hunks included in order until the budget is hit, is
 // marked truncated, and loses its content attachment.
 func BuildBatches(in Input) []Batch {
+	return BuildBatchesWithCap(in, 0)
+}
+
+// BuildBatchesWithCap is BuildBatches with a per-provider max_input_tokens
+// cap. cap <= 0 means "use default". The cap applies to the prompt body only;
+// the provider max_tokens field still governs the model's output budget.
+func BuildBatchesWithCap(in Input, cap int) []Batch {
 	header := renderHeader(in)
 	headerTok := estimateTokens(len(header))
-	budget := maxBatchTokens - headerTok
+	maxBatch := maxInputTokensDefault
+	if cap > 0 {
+		maxBatch = cap
+	}
+	if maxBatch < headerTok+256 {
+		maxBatch = headerTok + 256
+	}
+	budget := maxBatch - headerTok
 
 	var batches []Batch
 	var cur Batch

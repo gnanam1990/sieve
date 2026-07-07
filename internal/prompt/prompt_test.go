@@ -142,6 +142,36 @@ func TestBuildBatchesSplitsOnBudget(t *testing.T) {
 	}
 }
 
+// TestBuildBatchesWithCapShrinksBatch: a provider-level max_input_tokens cap
+// lowers the per-batch budget below the default.
+func TestBuildBatchesWithCapShrinksBatch(t *testing.T) {
+	mk := func(path string) File {
+		var lines []diff.Line
+		for i := 1; i <= 1500; i++ {
+			lines = append(lines, diff.Line{Kind: diff.AddedLine, NewNum: i, Content: strings.Repeat("x", 38)})
+		}
+		return File{Path: path, Status: "added", Diff: diff.FileDiff{
+			NewPath: path, Status: diff.Added,
+			Hunks: []diff.Hunk{{OldStart: 0, OldLines: 0, NewStart: 1, NewLines: 1500, Lines: lines}},
+		}}
+	}
+	in := Input{Title: "big", Files: []File{mk("a.go"), mk("b.go")}}
+	// With a 12k cap, each ~15k-token file must land in its own batch and be
+	// truncated, while the default 24k cap would hold one file fully.
+	batches := BuildBatchesWithCap(in, 12000)
+	if len(batches) != 2 {
+		t.Fatalf("got %d batches, want 2", len(batches))
+	}
+	for i, b := range batches {
+		if estimateTokens(len(b.User)) > 12000 {
+			t.Fatalf("batch %d over 12k cap: %d tokens", i, estimateTokens(len(b.User)))
+		}
+		if len(b.Truncated) != 1 {
+			t.Fatalf("batch %d should truncate its oversized file: %+v", i, b.Truncated)
+		}
+	}
+}
+
 func TestBuildBatchesTruncatesOversizedFile(t *testing.T) {
 	var hunks []diff.Hunk
 	for h := 0; h < 40; h++ {

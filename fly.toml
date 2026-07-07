@@ -1,0 +1,33 @@
+# fly.toml — example deployment for sieve serve on Fly.io.
+# Adjust app name, region, and primary_region as needed.
+app = "sieve-serve"
+primary_region = "iad"
+kill_signal = "SIGINT"
+kill_timeout = 10
+
+[build]
+  # Use the Go-based Dockerfile in the repo root.
+  dockerfile = "Dockerfile"
+
+[env]
+  SIEVE_HOST = "0.0.0.0"
+  SIEVE_PORT = "8080"
+  SIEVE_LOG_LEVEL = "info"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/healthz"
+
+[[metrics]]
+  port = 8080
+  path = "/metrics"

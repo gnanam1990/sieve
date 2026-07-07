@@ -4,6 +4,9 @@ A zero-infra, provider-agnostic PR reviewer. One static Go binary — no server,
 no container, no `docker pull`. Runs as a **GitHub Action** or a CLI, with your
 own model API key.
 
+[![sieve PR review](https://img.shields.io/badge/Action-sieve%20PR%20review-blue?logo=github)](https://github.com/marketplace/actions/sieve-pr-review)
+[![release](https://img.shields.io/github/v/release/gnanam1990/sieve)](https://github.com/gnanam1990/sieve/releases/latest)
+
 sieve fetches a PR, parses its diff into an exact line-anchor model, filters
 noise, sends batched prompts to the LLM provider of your choice, anchor-validates
 every finding against the real diff, routes survivors through a two-tier noise
@@ -45,6 +48,14 @@ checksum-verified `sieve` binary for the runner and runs `sieve review --post`.
   `SIEVE_API_KEY`) — it is **never** an action input, because inputs are echoed
   to logs.
 
+### Workflow templates
+
+Copy a ready-made template into `.github/workflows/` from
+[`.github/workflows/templates/`](.github/workflows/templates/):
+
+- `sieve.yml` — Anthropic Claude (default).
+- `sieve-openrouter.yml` — OpenRouter/Qwen (budget-friendly).
+
 ### Action inputs
 
 | Input | Default | Notes |
@@ -57,6 +68,12 @@ checksum-verified `sieve` binary for the runner and runs `sieve review --post`.
 | `post` | `true` | `false` = review without writing |
 | `version` | *(VERSION file)* | sieve release to download; `@v0` resolves the matching binary |
 | `fail_on_partial` | `false` | fail the job on exit 2 |
+
+### Marketplace
+
+`sieve PR review` is published on the
+[GitHub Marketplace](https://github.com/marketplace/actions/sieve-pr-review).
+Use `gnanam1990/sieve@v0` to stay on the latest stable major version.
 
 ## Install the CLI
 
@@ -292,9 +309,9 @@ provider:
 ```
 
 Kimi's API requires `temperature: 1` for `kimi-for-coding`; lower values are
-rejected. Because temperature 1 makes titles non-deterministic across runs, the
-cross-run "Resolved since last review" section can over-report when the model
-rephrases a finding title. The review itself is unaffected.
+rejected. The fingerprint that drives cross-run "Resolved since last review"
+excludes the title, so rephrased findings with the same anchor are no longer
+mis-reported as resolved+new.
 
 ### Groq
 

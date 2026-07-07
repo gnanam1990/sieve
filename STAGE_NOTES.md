@@ -128,14 +128,41 @@ Executed after the Stages 5–9 batch.
   `GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token)}"` so `sieve review` can
   authenticate to GitHub inside the sandbox wrapper, and the Kimi provider block
   was added alongside the existing OpenRouter/Anthropic/Groq examples.
-- [x] **Title-drift caveat** — with `temperature: 1` the model rephrases finding
-  titles across runs. Because the fingerprint is
-  `path|side|category|norm(title)|trim(anchorContent)`, a rephrased title looks
-  like a resolved old finding plus a new finding. The second recall run reported
-  **10 new findings** and **10 resolved since last review** even though the
-  planted issues were identical. This is expected behavior for the current
-  fingerprint scheme; it was documented in `README.md` as a hosted-model caveat
-  rather than changed pre-launch.
+- [x] **Title-drift caveat (v0.1.0)** — with `temperature: 1` the model rephrases finding
+  titles across runs. Because the fingerprint was
+  `path|side|category|norm(title)|trim(anchorContent)`, a rephrased title looked
+  like a resolved old finding plus a new finding. This was documented in the
+  README as a caveat and **fixed in v0.2.0** by removing title from the
+  fingerprint.
+
+---
+
+# v0.2.0 — self-host productionization + fingerprint fix + cost guardrails
+
+- [x] **Self-host productionization** — `sieve serve` now exposes Prometheus
+  text-format metrics on `/metrics` (`internal/metrics/`) with no external
+  client dependency: `sieve_reviews_total`, `sieve_review_duration_seconds`,
+  `sieve_tokens_total`, `sieve_queue_depth`, `sieve_dead_letters`,
+  `sieve_workers`. Queue gauges are wired into `internal/queue/`, and the
+  server-level `/metrics` integration test lives in `internal/server/`.
+- [x] **Server install script + Fly.io template** — `scripts/install-server.sh`
+  downloads and cosign-verifies the signed server binary to `/usr/local/bin`;
+  `fly.toml` + `Dockerfile` provide a ready-to-use Fly.io deployment with the
+  native metrics scraper pointed at `/metrics`. `docs/self-hosting.md` covers
+  quick install, Fly.io, and observability.
+- [x] **Title-drift fingerprint fix** — `fingerprint.For` now hashes only
+  `path|side|category|trim(anchor)`; the title is deliberately excluded, so a
+  `temperature: 1` rephrase of an identical issue keeps the same fingerprint and
+  is not reported as resolved+new. Golden fingerprints in review testdata were
+  regenerated.
+- [x] **Per-provider cost guardrails** — `max_input_tokens` caps the per-request
+  input budget per provider (0 = default 24k). `review.max_run_tokens` now scales
+  the pre-flight estimate for the `judge` pipeline (1.25× to cover generator +
+  judge). Config validates `max_input_tokens` in `0..200000`.
+- [x] **Action discoverability** — added Marketplace badge + release badge to
+  `README.md`, workflow templates in `.github/workflows/templates/`, issue
+  templates, and `dependabot.yml`.
+- [ ] **Ship v0.2.0 stable** — tag + release after local gates pass.
 - [x] **Documentation finalized** — `README.md` updated with Kimi provider
   section and calibration table row; this section in `STAGE_NOTES.md` populated.
 - [x] **Commit + push launch-prep changes** — pushed commit `59e2e18` to `main`.

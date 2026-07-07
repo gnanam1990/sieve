@@ -361,7 +361,7 @@
         "Category": "correctness",
         "Title": "Spelled-out number breaks lexical ordering",
         "Body": "Line 3 replaces a numeric token with a word; downstream consumers sorting these lines will misorder it. Keep the numeral.",
-        "Fingerprint": "d7e22de0ff6db77b",
+        "Fingerprint": "d891d833aceb9a2d",
         "Tier": "inline",
         "Repeated": false
       }

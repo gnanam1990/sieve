@@ -12,6 +12,7 @@ import (
 	"github.com/gnanam1990/sieve/internal/config"
 	"github.com/gnanam1990/sieve/internal/gh"
 	"github.com/gnanam1990/sieve/internal/gh/appauth"
+	"github.com/gnanam1990/sieve/internal/metrics"
 	"github.com/gnanam1990/sieve/internal/queue"
 	"github.com/gnanam1990/sieve/internal/review"
 	"github.com/gnanam1990/sieve/internal/version"
@@ -47,6 +48,7 @@ type Server struct {
 	httpSrv   *http.Server
 	apiBase   string
 	log       *slog.Logger
+	metrics   *metrics.Registry
 }
 
 // New wires the daemon from a validated Config. The webhook secret is read
@@ -82,16 +84,24 @@ func New(sc Config, opts Options) (*Server, error) {
 		appClient.Now = opts.Now
 	}
 
+	mreg := metrics.NewRegistry()
 	s := &Server{
 		sc:        sc,
 		baseCfg:   baseCfg,
 		appClient: appClient,
 		apiBase:   opts.APIBaseURL,
 		log:       log,
+		metrics:   mreg,
 	}
 
+	qMetrics := queue.Metrics{
+		QueueDepth:  mreg.Gauge("sieve_queue_depth").Set,
+		DeadLetters: mreg.Gauge("sieve_dead_letters").Set,
+		Workers:     mreg.Gauge("sieve_workers").Set,
+	}
 	q, err := queue.Open(queue.Options{
 		Dir: sc.DataDir, Workers: sc.Workers, Run: s.runReview, Log: log,
+		Metrics: qMetrics,
 	})
 	if err != nil {
 		return nil, err
@@ -112,7 +122,11 @@ func New(sc Config, opts Options) (*Server, error) {
 		return nil, err
 	}
 	s.wh = wh
-	s.mux = wh.Mux()
+
+	mux := http.NewServeMux()
+	wh.RegisterRoutes(mux)
+	mux.Handle("/metrics", mreg.Handler())
+	s.mux = mux
 	s.httpSrv = &http.Server{
 		Addr:              sc.Listen,
 		Handler:           s.mux,
@@ -166,11 +180,18 @@ func (s *Server) Shutdown() error {
 
 // runReview is the queue's job executor: mint an installation token, merge the
 // repo's review overrides over the server config, and run the pipeline with
-// --post semantics.
+// --post semantics. It records Prometheus metrics for duration, outcomes, and
+// token consumption.
 func (s *Server) runReview(ctx context.Context, job queue.Job) error {
+	start := metrics.Now()
 	ts := s.appClient.TokenSource(job.InstallationID)
 	cfg := s.repoConfig(ctx, ts, job)
-	_, err := review.Run(ctx, review.Options{
+	pipeline := cfg.Review.Pipeline
+	if pipeline == "" {
+		pipeline = "single"
+	}
+	outcome := "ok"
+	rc, err := review.Run(ctx, review.Options{
 		Repo:        job.Repo,
 		PRNumber:    job.PR,
 		TokenSource: ts,
@@ -179,6 +200,27 @@ func (s *Server) runReview(ctx context.Context, job queue.Job) error {
 		APIBaseURL:  s.apiBase,
 		Log:         s.log,
 	})
+	if err != nil {
+		outcome = "error"
+	}
+	s.metrics.Counter("sieve_reviews_total").Inc(map[string]string{
+		"pipeline": pipeline,
+		"outcome":  outcome,
+	})
+	s.metrics.Histogram("sieve_review_duration_seconds", []float64{1, 5, 15, 30, 60, 120, 300}).
+		Observe(metrics.Now().Sub(start).Seconds())
+	if rc != nil {
+		for role, u := range rc.Stats.RoleTokens {
+			s.metrics.Counter("sieve_tokens_total").Add(map[string]string{
+				"role":      role,
+				"direction": "in",
+			}, int64(u.In))
+			s.metrics.Counter("sieve_tokens_total").Add(map[string]string{
+				"role":      role,
+				"direction": "out",
+			}, int64(u.Out))
+		}
+	}
 	return err
 }
 

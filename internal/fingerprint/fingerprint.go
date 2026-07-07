@@ -13,7 +13,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
-	"unicode"
 
 	"github.com/gnanam1990/sieve/internal/diff"
 )
@@ -25,41 +24,23 @@ const Len = 16
 
 // For computes the fingerprint:
 //
-//	hex(sha256(path | side | category | norm(title) | trim(anchor)))[:16]
+//	hex(sha256(path | side | category | trim(anchor)))[:16]
 //
-// where norm lowercases the title and collapses every non-alphanumeric run to
-// a single space, and anchor is the diff content of the anchored line.
+// Anchor is the diff content of the anchored line. Title is deliberately
+// excluded: with temperature > 0 a model may rephrase an identical issue,
+// and including normalized title made such rephrasings look like resolved+new
+// findings. The title is still shown to humans; the fingerprint ties the
+// finding to its location and category only.
 func For(path, side, category, title, anchor string) string {
+	_ = title // unused by design; kept in the signature for call-site clarity
 	joined := strings.Join([]string{
 		path,
 		side,
 		category,
-		normTitle(title),
 		strings.TrimSpace(anchor),
 	}, "|")
 	sum := sha256.Sum256([]byte(joined))
 	return hex.EncodeToString(sum[:])[:Len]
-}
-
-// normTitle lowercases s and reduces it to alphanumerics separated by single
-// spaces (leading/trailing space trimmed). "Unchecked error from Close()" and
-// "unchecked  error from  close" both normalize to "unchecked error from close".
-func normTitle(s string) string {
-	var b strings.Builder
-	pendingSpace := false
-	for _, r := range strings.ToLower(s) {
-		switch {
-		case unicode.IsLetter(r) || unicode.IsNumber(r):
-			if pendingSpace && b.Len() > 0 {
-				b.WriteByte(' ')
-			}
-			pendingSpace = false
-			b.WriteRune(r)
-		default:
-			pendingSpace = true
-		}
-	}
-	return b.String()
 }
 
 // ContentIndex recovers the anchor-line content for a (path, side, line)

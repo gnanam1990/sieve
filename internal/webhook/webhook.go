@@ -65,9 +65,15 @@ func New(cfg Config, dataDir string) (*Handler, error) {
 // Mux returns the HTTP routes; nothing beyond /webhook and /healthz is exposed.
 func (h *Handler) Mux() *http.ServeMux {
 	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	return mux
+}
+
+// RegisterRoutes adds the webhook routes to an existing mux. Used by server.go
+// to compose /webhook, /healthz, and /metrics on one handler.
+func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/webhook", h.handleWebhook)
 	mux.HandleFunc("/healthz", h.handleHealthz)
-	return mux
 }
 
 // RejectedCount is the number of deliveries that failed signature verification.

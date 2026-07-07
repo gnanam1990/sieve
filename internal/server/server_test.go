@@ -323,6 +323,45 @@ func TestCheckAccessors(t *testing.T) {
 	}
 }
 
+// TestMetricsEndpoint verifies /metrics exposes queue + review counters after a
+// webhook-driven review.
+func TestMetricsEndpoint(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("SIEVE_TEST_WH_SECRET", "whsecret")
+	diff, _ := readDiff()
+	hub := &fakeHub{t: t, diff: diff}
+	s := buildServer(t, hub)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.Start(ctx)
+
+	body := prWebhook(t, "octo/hello", 7, "head888", 555)
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(string(body)))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-GitHub-Delivery", "d2")
+	req.Header.Set("X-Hub-Signature-256", sign([]byte("whsecret"), body))
+	s.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	waitFor(t, func() bool { return atomic.LoadInt32(&hub.creates) == 1 })
+
+	rec := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	s.Handler().ServeHTTP(rec, req2)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/metrics status %d", rec.Code)
+	}
+	bodyStr := rec.Body.String()
+	for _, want := range []string{
+		"# TYPE sieve_queue_depth gauge",
+		"sieve_workers 1",
+		"sieve_reviews_total{outcome=\"ok\",pipeline=\"single\"} 1",
+	} {
+		if !strings.Contains(bodyStr, want) {
+			t.Errorf("missing %q in /metrics:\n%s", want, bodyStr)
+		}
+	}
+	_ = s.Shutdown()
+}
+
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)

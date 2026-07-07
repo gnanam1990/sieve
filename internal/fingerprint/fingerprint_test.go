@@ -41,11 +41,14 @@ func TestChangedUnderContentEdit(t *testing.T) {
 	}
 }
 
-func TestChangedUnderTitleRewrite(t *testing.T) {
+// TestStableUnderTitleRewrite: identical anchor/category with a rephrased title
+// keeps the same fingerprint — the bug is the same bug, only the model's prose
+// drifted.
+func TestStableUnderTitleRewrite(t *testing.T) {
 	before := For("p.go", "RIGHT", "bug", "Guard against nil", "x := 1")
 	after := For("p.go", "RIGHT", "bug", "Check for a nil pointer", "x := 1")
-	if before == after {
-		t.Fatal("title rewrite must change the fingerprint")
+	if before != after {
+		t.Fatal("title rewrite changed the fingerprint")
 	}
 }
 
@@ -67,25 +70,27 @@ func TestChangedUnderSideOrCategory(t *testing.T) {
 	}
 }
 
-// TestTitleNormalization: case, punctuation, and whitespace runs collapse to
-// the same normalized title, so cosmetically different titles fingerprint
-// identically.
-func TestTitleNormalization(t *testing.T) {
+// TestTitleNoLongerInFingerprint: title text does not influence the fingerprint,
+// even when normalized identically.
+func TestTitleNoLongerInFingerprint(t *testing.T) {
 	cases := [][2]string{
 		{"Unchecked error from Close()", "unchecked   error from close"},
 		{"SQL   by  string-concat!!!", "sql by string concat"},
 		{"  leading and trailing  ", "leading and trailing"},
 	}
 	for _, c := range cases {
-		if a, b := normTitle(c[0]), normTitle(c[1]); a != b {
-			t.Errorf("normTitle mismatch: %q -> %q vs %q -> %q", c[0], a, c[1], b)
+		if a, b := For("p.go", "RIGHT", "bug", c[0], "x := 1"), For("p.go", "RIGHT", "bug", c[1], "x := 1"); a != b {
+			t.Errorf("cosmetic title difference changed fingerprint: %q vs %q", c[0], c[1])
 		}
 	}
-	if got := normTitle("Résumé build 42"); got != "résumé build 42" {
-		t.Errorf("unicode letters/numbers must survive: got %q", got)
-	}
-	if got := normTitle("!!! @@@ ###"); got != "" {
-		t.Errorf("all-punctuation must normalize to empty, got %q", got)
+}
+
+// TestTitleChangingWithAnchorChanging: when the anchor changes, even a
+// cosmetically similar title should produce a new fingerprint.
+func TestTitleChangingWithAnchorChanging(t *testing.T) {
+	base := For("p.go", "RIGHT", "bug", "Title", "x := 1")
+	if base == For("p.go", "RIGHT", "bug", "Title", "x := 2") {
+		t.Fatal("anchor change must change the fingerprint")
 	}
 }
 

@@ -58,6 +58,14 @@ var ErrClosed = errors.New("queue is shutting down")
 // after all retries dead-letters the job.
 type RunFunc func(context.Context, Job) error
 
+// Metrics exposes the queue-level gauges the daemon wires to /metrics. All
+// fields are optional; nil fields are skipped.
+type Metrics struct {
+	QueueDepth  func(float64)
+	DeadLetters func(float64)
+	Workers     func(float64)
+}
+
 // Options configures a Queue.
 type Options struct {
 	Dir        string // data_dir; queue.jsonl lives here
@@ -66,6 +74,7 @@ type Options struct {
 	Log        *slog.Logger
 	MaxRetries int           // attempts beyond the first; default 2 (3 total)
 	Backoff    time.Duration // base retry backoff; tests shrink it
+	Metrics    Metrics       // optional gauges scraped by /metrics
 }
 
 // Queue is a bounded worker pool over a persistent, coalescing job log.
@@ -76,6 +85,7 @@ type Queue struct {
 	log        *slog.Logger
 	maxRetries int
 	backoff    time.Duration
+	metrics    Metrics
 
 	mu      sync.Mutex
 	cond    *sync.Cond
@@ -139,12 +149,14 @@ func Open(opts Options) (*Queue, error) {
 		log:        opts.Log,
 		maxRetries: maxRetries,
 		backoff:    backoff,
+		metrics:    opts.Metrics,
 		pending:    pending,
 		attempts:   attempts,
 		running:    map[string]bool{},
 		f:          f,
 	}
 	q.cond = sync.NewCond(&q.mu)
+	q.publishGauges()
 	return q, nil
 }
 
@@ -292,11 +304,13 @@ func (q *Queue) Enqueue(job Job) error {
 		if q.pending[i].Key() == key {
 			q.pending[i] = job // coalesce in place: newest head only
 			q.cond.Broadcast()
+			q.publishGauges()
 			return nil
 		}
 	}
 	q.pending = append(q.pending, job)
 	q.cond.Broadcast()
+	q.publishGauges()
 	return nil
 }
 
@@ -312,6 +326,7 @@ func (q *Queue) Start(ctx context.Context) {
 	// SIGTERM cannot abort an in-flight review mid-POST.
 	_ = ctx
 	q.runCtx, q.runCancel = context.WithCancel(context.Background())
+	q.publishGauges()
 	for i := 0; i < q.workers; i++ {
 		q.loopWg.Add(1)
 		go q.workerLoop()
@@ -417,6 +432,7 @@ func (q *Queue) complete(job Job, err error) {
 		delete(q.running, job.Key())
 		q.mu.Unlock()
 		q.cond.Broadcast()
+		q.publishGauges()
 		return
 	}
 	if err != nil {
@@ -436,6 +452,7 @@ func (q *Queue) complete(job Job, err error) {
 	delete(q.running, job.Key())
 	q.mu.Unlock()
 	q.cond.Broadcast() // a job queued behind this key may now be runnable
+	q.publishGauges()
 }
 
 // writeLocked appends one record to the log. Caller holds q.mu.
@@ -463,6 +480,19 @@ func (q *Queue) DeadLetters() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.dead
+}
+
+// publishGauges updates optional metric gauges from the current state.
+func (q *Queue) publishGauges() {
+	if q.metrics.QueueDepth != nil {
+		q.metrics.QueueDepth(float64(len(q.pending)))
+	}
+	if q.metrics.DeadLetters != nil {
+		q.metrics.DeadLetters(float64(q.dead))
+	}
+	if q.metrics.Workers != nil {
+		q.metrics.Workers(float64(q.workers))
+	}
 }
 
 // Shutdown stops intake, lets in-flight jobs finish (bounded by ctx), and closes

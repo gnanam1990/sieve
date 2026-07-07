@@ -1,0 +1,25 @@
+name: sieve PR review (OpenRouter)
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  sieve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gnanam1990/sieve@v0
+        with:
+          provider: openai-compat
+          model: qwen/qwen3-coder-next
+          base_url: https://openrouter.ai/api/v1
+          api_key_env_name: OPENROUTER_API_KEY
+          post: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

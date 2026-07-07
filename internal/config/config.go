@@ -74,6 +74,7 @@ type Provider struct {
 	BaseURL        string  `yaml:"base_url"` // required iff type == openai-compat
 	APIKeyEnv      string  `yaml:"api_key_env"`
 	MaxTokens      int     `yaml:"max_tokens"`
+	MaxInputTokens int     `yaml:"max_input_tokens"` // soft cap: refuse prompt before provider does
 	Temperature    float64 `yaml:"temperature"`
 	TimeoutSeconds int     `yaml:"timeout_seconds"`
 	Fixture        string  `yaml:"fixture"` // fake type only: canned response file
@@ -256,6 +257,9 @@ func validateProviderRanges(name string, p Provider) error {
 	}
 	if p.MaxTokens < 256 || p.MaxTokens > 32768 {
 		return fmt.Errorf("providers.%s.max_tokens must be between 256 and 32768, got %d", name, p.MaxTokens)
+	}
+	if p.MaxInputTokens < 0 || p.MaxInputTokens > 200000 {
+		return fmt.Errorf("providers.%s.max_input_tokens must be between 0 and 200000, got %d", name, p.MaxInputTokens)
 	}
 	if p.Temperature < 0 || p.Temperature > 1 {
 		return fmt.Errorf("providers.%s.temperature must be between 0 and 1, got %g", name, p.Temperature)

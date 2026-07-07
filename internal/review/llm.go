@@ -108,7 +108,13 @@ func buildGeneration(ctx context.Context, rc *ReviewContext, client *gh.Client, 
 		rc.Stats.FilesDeltaReviewed = len(sent)
 		rc.Stats.TokensSaved = estimateTokensSaved(rc, plan)
 	}
-	g.batches = prompt.BuildBatches(input)
+	pp, err := primaryProvider(cfg)
+	if err != nil {
+		// Should not happen because ValidateForReview already ran; keep the
+		// historical behavior of using default batch size if it somehow did.
+		pp = config.Provider{}
+	}
+	g.batches = prompt.BuildBatchesWithCap(input, pp.MaxInputTokens)
 	markTruncated(rc, g.batches)
 	g.anchors = findings.NewAnchors(sent)
 	return g
