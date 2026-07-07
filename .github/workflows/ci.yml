@@ -60,11 +60,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: gnanam1990/sieve@v0
+      - uses: ./
         with:
           provider: fake
           post: false
-          version: v0.2.1
           repo: gnanam1990/sieve
           pr: "1"
 
