@@ -162,21 +162,15 @@ Executed after the Stages 5–9 batch.
 - [x] **Action discoverability** — added Marketplace badge + release badge to
   `README.md`, workflow templates in `.github/workflows/templates/`, issue
   templates, and `dependabot.yml`.
-- [ ] **Ship v0.2.0 stable** — tag + release after local gates pass.
-- [x] **Documentation finalized** — `README.md` updated with Kimi provider
-  section and calibration table row; this section in `STAGE_NOTES.md` populated.
-- [x] **Commit + push launch-prep changes** — pushed commit `59e2e18` to `main`.
-- [x] **Tag `v0.1.0` and push** — tag pushed; release workflow run
-  `28838824460` completed (test 1m19s + release 1m14s).
-- [x] **Verify release artifacts** — GitHub release `v0.1.0` published with
-  4 platform tarballs + 4 raw binaries + `checksums.txt`. Floating tag `v0`
-  moved to the VERSION-pin commit `d38448b` (child of `v0.1.0` commit
-  `59e2e18`). Homebrew cask `Casks/sieve.rb` pushed to
-  `gnanam1990/homebrew-tap` (commit "Brew cask update for sieve version
-  v0.1.0").
+- [x] **Ship v0.2.0 stable** — tag `v0.2.0` pushed; release workflow
+  `28840227205` completed (test 1m22s + release 1m33s).
+- [x] **Verify release artifacts** — GitHub release `v0.2.0` published with
+  27 assets: 4 tarballs + 4 raw binaries + `checksums.txt` + 18 cosign
+  `.sig`/`.cert` files. Floating tag `v0` moved to the VERSION-pin commit
+  `9608728`.
 - [x] **Post-release smoke test** — downloaded
-  `sieve_0.1.0_darwin_arm64.tar.gz`, extracted binary reports
-  `sieve 0.1.0 commit:59e2e18`, and `sieve review --dry-run` against sandbox
+  `sieve_0.2.0_darwin_arm64.tar.gz`; `sha256sum --check` passed; extracted
+  binary reports `sieve 0.2.0 commit:9608728`.
   PR `gnanam1990/sieve-sandbox-recall-kimi-2026-07-07#1` successfully fetched
   PR metadata and emitted the context JSON. A live `--post` run was not
   repeated because `KIMI_API_KEY` is not present in the current shell; the
