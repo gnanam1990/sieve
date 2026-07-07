@@ -35,6 +35,7 @@ type WalkthroughInput struct {
 	Skipped       []SkippedFile
 	FilesReviewed int
 	FilesSkipped  int
+	Ignored       []gate.Finding // findings suppressed by .sieve/ignore.yml
 	Model         string
 	Learnings     int  // repository rules applied (>0 shows in the footer)
 	Calibrated    bool // runtime confidence calibration was on
@@ -56,6 +57,7 @@ type truncFlags struct {
 	notes    bool
 	resolved bool
 	skipped  bool
+	ignored  bool
 }
 
 // Walkthrough renders the full walkthrough body, shrinking it under
@@ -68,6 +70,7 @@ func Walkthrough(in WalkthroughInput) string {
 		{notes: true},
 		{notes: true, resolved: true},
 		{notes: true, resolved: true, skipped: true},
+		{notes: true, resolved: true, skipped: true, ignored: true},
 	} {
 		body := build(in, tr)
 		if len(body) <= MaxCommentBytes {
@@ -77,7 +80,7 @@ func Walkthrough(in WalkthroughInput) string {
 	// Even fully truncated the essentials exceed the cap (pathological): return
 	// the smallest form anyway — the metadata block is intact, which is what
 	// cross-run dedupe depends on.
-	return build(in, truncFlags{notes: true, resolved: true, skipped: true})
+	return build(in, truncFlags{notes: true, resolved: true, skipped: true, ignored: true})
 }
 
 func build(in WalkthroughInput, tr truncFlags) string {
@@ -88,9 +91,10 @@ func build(in WalkthroughInput, tr truncFlags) string {
 	b.WriteString(MetaComment(in.Meta))
 	b.WriteByte('\n')
 	b.WriteString("## sieve review\n")
-	fmt.Fprintf(&b, "**%s** · %d notes · %d resolved · %d files reviewed, %d skipped\n",
+	ignoredCount := len(in.Ignored)
+	fmt.Fprintf(&b, "**%s** · %d notes · %d resolved · %d ignored · %d files reviewed, %d skipped\n",
 		pluralize(st.InlineCount, "finding", "findings"),
-		st.NotesCount, st.ResolvedCount, in.FilesReviewed, in.FilesSkipped)
+		st.NotesCount, st.ResolvedCount, ignoredCount, in.FilesReviewed, in.FilesSkipped)
 
 	if len(in.Result.Inline) > 0 {
 		b.WriteString("\n| Severity | Finding | Where |\n|---|---|---|\n")
@@ -110,6 +114,10 @@ func build(in WalkthroughInput, tr truncFlags) string {
 	if len(in.Skipped) > 0 {
 		b.WriteString("\n")
 		b.WriteString(skippedSection(in.Skipped, tr.skipped))
+	}
+	if ignoredCount > 0 {
+		b.WriteString("\n")
+		b.WriteString(ignoredSection(in.Ignored, tr.ignored))
 	}
 
 	extra := ""
@@ -178,6 +186,20 @@ func skippedSection(skipped []SkippedFile, truncated bool) string {
 	} else {
 		for _, s := range skipped {
 			fmt.Fprintf(&b, "- `%s` — %s\n", s.Path, s.Reason)
+		}
+	}
+	b.WriteString("\n</details>\n")
+	return b.String()
+}
+
+func ignoredSection(ignored []gate.Finding, truncated bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "<details><summary>🚫 Ignored by rule (%d)</summary>\n\n", len(ignored))
+	if truncated {
+		fmt.Fprintf(&b, "…and %d more — see JSON output\n", len(ignored))
+	} else {
+		for _, f := range ignored {
+			fmt.Fprintf(&b, "- %s · %s (`%s`)\n", sevMarker[f.Severity], f.Title, where(f.Finding))
 		}
 	}
 	b.WriteString("\n</details>\n")

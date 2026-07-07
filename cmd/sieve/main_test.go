@@ -395,6 +395,50 @@ func TestLearningsNoNegatives(t *testing.T) {
 	}
 }
 
+func TestIgnoreCLI(t *testing.T) {
+	dir := t.TempDir()
+	ignorePath := filepath.Join(dir, ".sieve", "ignore.yml")
+
+	// Without a matcher the command must fail.
+	var out, errOut bytes.Buffer
+	if code := run([]string{"ignore", "--file", ignorePath, "--reason", "noise"}, &out, &errOut); code != exitError {
+		t.Fatalf("ignore without matcher must error, got %d", code)
+	}
+
+	// Add a category rule.
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"ignore", "--file", ignorePath, "--category", "style", "--reason", "accepted style", "--expires", "2099-12-31"}, &out, &errOut); code != exitOK {
+		t.Fatalf("ignore exit %d; stderr:\n%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "added rule") {
+		t.Fatalf("expected added-rule output, got:\n%s", out.String())
+	}
+	data, err := os.ReadFile(ignorePath) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "category: style") || !strings.Contains(content, "reason: accepted style") || !strings.Contains(content, "expires:") || !strings.Contains(content, "2099-12-31") {
+		t.Fatalf("ignore file missing rule:\n%s", content)
+	}
+
+	// Add a second rule; the first must be preserved.
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"ignore", "--file", ignorePath, "--path", "vendor/**", "--reason", "generated"}, &out, &errOut); code != exitOK {
+		t.Fatalf("ignore exit %d; stderr:\n%s", code, errOut.String())
+	}
+	data, err = os.ReadFile(ignorePath) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	content = string(data)
+	if !strings.Contains(content, "category: style") || !strings.Contains(content, "path: vendor/**") {
+		t.Fatalf("ignore file missing both rules:\n%s", content)
+	}
+}
+
 func TestSyncCLI(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

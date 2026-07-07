@@ -368,6 +368,7 @@
     ],
     "Notes": null,
     "Resolved": null,
+    "Ignored": null,
     "Stats": {
       "InputFindings": 1,
       "DuplicatesMerged": 0,
@@ -377,7 +378,8 @@
       "NotesCount": 0,
       "RepeatedInline": 0,
       "RepeatedNotes": 0,
-      "ResolvedCount": 0
+      "ResolvedCount": 0,
+      "IgnoredCount": 0
     }
   },
   "Stats": {
@@ -388,6 +390,7 @@
     "LinesRemoved": 13,
     "FindingsTotal": 1,
     "FindingsDropped": 2,
+    "IgnoredCount": 0,
     "BatchesFailed": 0,
     "Requests": 1,
     "Retries": 0,

@@ -9,6 +9,7 @@ import (
 	"github.com/gnanam1990/sieve/internal/config"
 	"github.com/gnanam1990/sieve/internal/findings"
 	"github.com/gnanam1990/sieve/internal/fingerprint"
+	"github.com/gnanam1990/sieve/internal/ignore"
 )
 
 func testCfg() config.Review { return config.Default().Review } // floor .6, inline .8, sev major, cap 10
@@ -56,7 +57,7 @@ func TestRoutingMatrix(t *testing.T) {
 		}
 	}
 
-	res := Route(fs, emptyIndex(), nil, testCfg())
+	res := Route(fs, emptyIndex(), nil, testCfg(), ignore.Rules{})
 
 	got := map[string]string{} // path -> tier landed
 	for _, f := range res.Inline {
@@ -96,7 +97,7 @@ func TestInlineSeverityCriticalOnly(t *testing.T) {
 		mk("a.go", 1, findings.SeverityCritical, 0.95),
 		mk("b.go", 1, findings.SeverityMajor, 0.95), // major no longer inline
 	}
-	res := Route(fs, emptyIndex(), nil, cfg)
+	res := Route(fs, emptyIndex(), nil, cfg, ignore.Rules{})
 	if len(res.Inline) != 1 || res.Inline[0].Path != "a.go" {
 		t.Fatalf("only critical should be inline, got %+v", res.Inline)
 	}
@@ -118,7 +119,7 @@ func TestCapOverflowOrdering(t *testing.T) {
 		mk("m.go", 2, findings.SeverityMajor, 0.95),
 		mk("q.go", 3, findings.SeverityCritical, 0.90), // ties a.go:1 on sev+conf, path breaks it
 	}
-	res := Route(fs, emptyIndex(), nil, cfg)
+	res := Route(fs, emptyIndex(), nil, cfg, ignore.Rules{})
 
 	// Expected inline order: critical desc-conf then path/line, then major.
 	// critical: a.go:9(.99), a.go:1(.90)/q.go:3(.90) -> path order a.go then q.go.
@@ -159,7 +160,7 @@ func TestWithinRunDedupe(t *testing.T) {
 		func() findings.Finding { f := mk("a.go", 10, findings.SeverityMajor, 0.99); f.Category = "perf"; return f }(), // different category, kept
 		mk("a.go", 40, findings.SeverityMajor, 0.90), // non-overlapping line, kept
 	}
-	res := Route(fs, emptyIndex(), nil, testCfg())
+	res := Route(fs, emptyIndex(), nil, testCfg(), ignore.Rules{})
 	if res.Stats.DuplicatesMerged != 1 {
 		t.Fatalf("DuplicatesMerged = %d, want 1", res.Stats.DuplicatesMerged)
 	}
@@ -187,7 +188,7 @@ func TestRangeOverlapDedupe(t *testing.T) {
 	f1 := mk("a.go", 10, findings.SeverityMajor, 0.90)
 	f1.EndLine = 20
 	f2 := mk("a.go", 15, findings.SeverityMajor, 0.95) // inside [10,20]
-	res := Route([]findings.Finding{f1, f2}, emptyIndex(), nil, testCfg())
+	res := Route([]findings.Finding{f1, f2}, emptyIndex(), nil, testCfg(), ignore.Rules{})
 	if res.Stats.DuplicatesMerged != 1 {
 		t.Fatalf("overlapping range should merge, got %d", res.Stats.DuplicatesMerged)
 	}
@@ -204,11 +205,11 @@ func TestCrossRunRepeatedAndResolved(t *testing.T) {
 
 	// Prior compact records from a first run, with cids stamped, plus a
 	// fingerprint that won't reappear (a resolved finding).
-	first := Route(fs, emptyIndex(), nil, cfg)
+	first := Route(fs, emptyIndex(), nil, cfg, ignore.Rules{})
 	prior := first.ActiveCompact(map[string]int64{first.Inline[0].Fingerprint: 4242})
 	prior = append(prior, CompactFinding{Fp: "deadbeefdeadbeef", Path: "gone.go", Severity: "major"})
 
-	second := Route(fs, emptyIndex(), prior, cfg)
+	second := Route(fs, emptyIndex(), prior, cfg, ignore.Rules{})
 	if second.Stats.RepeatedInline != 1 || second.Stats.RepeatedNotes != 1 {
 		t.Fatalf("want 1 repeated inline + 1 repeated note, got %+v", second.Stats)
 	}
@@ -228,14 +229,14 @@ func TestCrossRunRepeatedAndResolved(t *testing.T) {
 
 // TestFirstRunNoPrior: nil prior => nothing repeated, nothing resolved.
 func TestFirstRunNoPrior(t *testing.T) {
-	res := Route([]findings.Finding{mk("a.go", 1, findings.SeverityCritical, 0.95)}, emptyIndex(), nil, testCfg())
+	res := Route([]findings.Finding{mk("a.go", 1, findings.SeverityCritical, 0.95)}, emptyIndex(), nil, testCfg(), ignore.Rules{})
 	if res.Stats.RepeatedInline != 0 || len(res.Resolved) != 0 {
 		t.Fatalf("first run should have no repeats/resolved: %+v", res.Stats)
 	}
 }
 
 func TestEmptyInput(t *testing.T) {
-	res := Route(nil, emptyIndex(), nil, testCfg())
+	res := Route(nil, emptyIndex(), nil, testCfg(), ignore.Rules{})
 	if len(res.Inline) != 0 || len(res.Notes) != 0 || res.Stats.InputFindings != 0 {
 		t.Fatalf("empty input must produce empty result: %+v", res)
 	}
@@ -252,7 +253,7 @@ func TestTierJSON(t *testing.T) {
 }
 
 func TestFingerprintAttached(t *testing.T) {
-	res := Route([]findings.Finding{mk("a.go", 1, findings.SeverityCritical, 0.95)}, emptyIndex(), nil, testCfg())
+	res := Route([]findings.Finding{mk("a.go", 1, findings.SeverityCritical, 0.95)}, emptyIndex(), nil, testCfg(), ignore.Rules{})
 	if len(res.Inline[0].Fingerprint) != fingerprint.Len {
 		t.Fatalf("fingerprint not attached: %q", res.Inline[0].Fingerprint)
 	}
@@ -263,7 +264,7 @@ func TestMetaRoundTrip(t *testing.T) {
 	res := Route([]findings.Finding{
 		mk("a.go", 1, findings.SeverityCritical, 0.95),
 		mk("b.go", 2, findings.SeverityMinor, 0.70),
-	}, emptyIndex(), nil, testCfg())
+	}, emptyIndex(), nil, testCfg(), ignore.Rules{})
 	m := BuildMeta("head123", "2026-07-06T00:00:00Z", res.ActiveCompact(nil), nil, []string{"aaaa"})
 	if m.Version != 2 || m.HeadSHA != "head123" || len(m.Findings) != 2 || len(m.Resolved) != 1 {
 		t.Fatalf("bad meta: %+v", m)
@@ -327,7 +328,7 @@ func TestMetaFindingsCap(t *testing.T) {
 	for i := 0; i < 150; i++ {
 		fs = append(fs, mk(fmt.Sprintf("f%d.go", i), 1, findings.SeverityMinor, 0.70))
 	}
-	res := Route(fs, emptyIndex(), nil, testCfg())
+	res := Route(fs, emptyIndex(), nil, testCfg(), ignore.Rules{})
 	m := BuildMeta("h", "t", res.ActiveCompact(nil), nil, nil)
 	if len(m.Findings) != maxMetaFindings {
 		t.Fatalf("findings not capped: %d, want %d", len(m.Findings), maxMetaFindings)
@@ -394,7 +395,7 @@ func TestShortExpandSide(t *testing.T) {
 
 // TestAddCarriedAndResolved covers the delta-assembly helpers.
 func TestAddCarriedAndResolved(t *testing.T) {
-	res := Route([]findings.Finding{mk("fresh.go", 1, findings.SeverityCritical, 0.95)}, emptyIndex(), nil, testCfg())
+	res := Route([]findings.Finding{mk("fresh.go", 1, findings.SeverityCritical, 0.95)}, emptyIndex(), nil, testCfg(), ignore.Rules{})
 	res.AddCarried([]CompactFinding{
 		{Fp: "carried1", Path: "old.go", Line: 9, Side: "R", Severity: "major", Conf: 0.9, Title: "carried inline", Cid: 11, Tier: "inline"},
 		{Fp: "carried2", Path: "old.go", Line: 3, Side: "R", Severity: "minor", Conf: 0.7, Title: "carried note", Tier: "notes"},
@@ -414,5 +415,35 @@ func TestAddCarriedAndResolved(t *testing.T) {
 	res.AddResolved([]CompactFinding{{Fp: "gone1", Path: "z.go", Severity: "major"}, {Fp: "gone1"}})
 	if res.Stats.ResolvedCount != 1 {
 		t.Fatalf("AddResolved dedupe failed: %d", res.Stats.ResolvedCount)
+	}
+}
+
+// TestIgnoreRules drops findings and prior records matched by active ignore rules
+// before tier routing / cross-run dedupe, and counts them in Stats.IgnoredCount.
+func TestIgnoreRules(t *testing.T) {
+	f1 := mk("a.go", 1, findings.SeverityCritical, 0.95)
+	f1.Category = "style"
+	f2 := mk("b.go", 2, findings.SeverityMajor, 0.95)
+	f2.Category = "bug"
+
+	rules := ignore.Rules{Rules: []ignore.Rule{{Category: "style"}}}
+	res := Route([]findings.Finding{f1, f2}, emptyIndex(), nil, testCfg(), rules)
+	if res.Stats.IgnoredCount != 1 {
+		t.Fatalf("IgnoredCount = %d, want 1", res.Stats.IgnoredCount)
+	}
+	if len(res.Ignored) != 1 || res.Ignored[0].Path != "a.go" {
+		t.Fatalf("Ignored = %+v, want a.go", res.Ignored)
+	}
+	if len(res.Inline) != 1 || res.Inline[0].Path != "b.go" {
+		t.Fatalf("only bug should survive, got %+v", res.Inline)
+	}
+
+	// A prior active finding in the ignored category must not become resolved.
+	prior := []CompactFinding{
+		{Fp: res.Ignored[0].Fingerprint, Path: "a.go", Severity: "critical", Category: "style", Title: "style issue"},
+	}
+	res2 := Route([]findings.Finding{f2}, emptyIndex(), prior, testCfg(), rules)
+	if len(res2.Resolved) != 0 {
+		t.Fatalf("ignored prior finding must not be resolved, got %+v", res2.Resolved)
 	}
 }

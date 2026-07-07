@@ -73,6 +73,80 @@ func TestRunLocalReview(t *testing.T) {
 	}
 }
 
+// TestRunLocalReviewIgnores verifies that active .sieve/ignore.yml rules drop
+// matching findings before tier routing and report them in Stats.IgnoredCount.
+func TestRunLocalReviewIgnores(t *testing.T) {
+	dir := initGitRepo(t)
+
+	// Create an ignore rule that suppresses any style finding.
+	writeRepoFile(t, dir, ".sieve/ignore.yml", "ignore:\n  - category: style\n    reason: accepted style\n")
+
+	writeRepoFile(t, dir, "service.go", "package service\n\nfunc Run() {\n\tprintln(\"ok\")\n}\n")
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "base")
+
+	runGit(t, dir, "checkout", "-b", "feat")
+	writeRepoFile(t, dir, "service.go", "package service\n\nfunc Run() {\n\tvar x *int\n\tprintln(*x)\n}\n")
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "bug")
+
+	diffBytes, err := gitDiff(dir, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := diff.Parse(diffBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := firstAddedLine(files)
+	if line == 0 {
+		t.Fatal("no added line found in local diff")
+	}
+
+	findingsJSON := fmt.Sprintf(`{"findings":[
+		{"Path":"service.go","Line":%d,"Side":"RIGHT","Severity":"minor","Confidence":0.7,"Category":"style","Title":"Style issue","Body":"style"},
+		{"Path":"service.go","Line":%d,"Side":"RIGHT","Severity":"critical","Confidence":0.95,"Category":"bug","Title":"Nil pointer dereference","Body":"Dereferencing x without checking for nil."}
+	]}`, line, line)
+	fixturePath := writeFixture(t, findingsJSON)
+
+	cfgPath := filepath.Join(t.TempDir(), ".sieve.yml")
+	cfgYAML := fmt.Sprintf("provider:\n  type: fake\n  fixture: %q\n", fixturePath)
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rc, err := Run(context.Background(), Options{
+		Repo:       "local/test",
+		ConfigPath: cfgPath,
+		Local:      true,
+		BaseRef:    "main",
+		RepoPath:   dir,
+		Log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc.Gate == nil {
+		t.Fatal("expected gate result")
+	}
+	active := len(rc.Gate.Inline) + len(rc.Gate.Notes)
+	if active != 1 {
+		t.Fatalf("want 1 active finding, got %d (inline %d, notes %d)", active, len(rc.Gate.Inline), len(rc.Gate.Notes))
+	}
+	if rc.Gate.Stats.IgnoredCount != 1 {
+		t.Fatalf("want IgnoredCount 1, got %d", rc.Gate.Stats.IgnoredCount)
+	}
+	if rc.Stats.IgnoredCount != 1 {
+		t.Fatalf("want Stats.IgnoredCount 1, got %d", rc.Stats.IgnoredCount)
+	}
+	if len(rc.Gate.Ignored) != 1 || rc.Gate.Ignored[0].Category != "style" {
+		t.Fatalf("want 1 ignored style finding, got %+v", rc.Gate.Ignored)
+	}
+	if rc.Gate.Inline[0].Title != "Nil pointer dereference" {
+		t.Fatalf("expected bug to survive, got %+v", rc.Gate.Inline[0])
+	}
+}
+
 // TestBuildLocalDryRun verifies the stage-1 context can be assembled from a
 // local worktree without any token or provider configuration.
 func TestBuildLocalDryRun(t *testing.T) {

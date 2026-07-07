@@ -16,6 +16,7 @@ import (
 	"github.com/gnanam1990/sieve/internal/config"
 	"github.com/gnanam1990/sieve/internal/findings"
 	"github.com/gnanam1990/sieve/internal/fingerprint"
+	"github.com/gnanam1990/sieve/internal/ignore"
 )
 
 // Tier is a routing destination.
@@ -56,6 +57,7 @@ type Stats struct {
 	RepeatedInline     int // inline findings already posted in a prior run
 	RepeatedNotes      int // notes findings seen in a prior run
 	ResolvedCount      int // prior fingerprints absent this run
+	IgnoredCount       int // findings dropped by repository ignore rules
 }
 
 // GateResult is the routing outcome.
@@ -65,6 +67,7 @@ type GateResult struct {
 	Inline   []Finding
 	Notes    []Finding
 	Resolved []CompactFinding
+	Ignored  []Finding // findings suppressed by .sieve/ignore.yml (not posted)
 	Stats    Stats
 }
 
@@ -74,8 +77,9 @@ type GateResult struct {
 // prior one is marked Repeated and inherits its inline comment ID (cid), and a
 // prior finding absent this run is Resolved. For a delta re-review, prior must
 // be restricted to findings on the re-reviewed paths — untouched-file findings
-// are carried forward separately by internal/incremental.
-func Route(fs []findings.Finding, idx *fingerprint.ContentIndex, prior []CompactFinding, cfg config.Review) GateResult {
+// are carried forward separately by internal/incremental. rules is an optional
+// active ignore set; matching findings are dropped before tier routing.
+func Route(fs []findings.Finding, idx *fingerprint.ContentIndex, prior []CompactFinding, cfg config.Review, rules ignore.Rules) GateResult {
 	var res GateResult
 	res.Stats.InputFindings = len(fs)
 
@@ -84,30 +88,50 @@ func Route(fs []findings.Finding, idx *fingerprint.ContentIndex, prior []Compact
 	deduped, merged := dedupe(fs)
 	res.Stats.DuplicatesMerged = merged
 
-	// 2. Confidence floor.
-	survivors := make([]findings.Finding, 0, len(deduped))
+	// 2. Fingerprint decoration and ignore-rule filter. Both must happen before
+	// the confidence floor so ignored findings are accounted for separately.
+	decorated := make([]Finding, 0, len(deduped))
 	for _, f := range deduped {
-		if f.Confidence < cfg.MinConfidence {
-			res.Stats.FindingsBelowFloor++
-			continue
-		}
-		survivors = append(survivors, f)
-	}
-
-	// 3. Tier routing + fingerprint decoration.
-	inlineFloor := findings.Severity(cfg.InlineMinSeverity)
-	var inline, notes []Finding
-	for _, f := range survivors {
 		anchor := idx.Anchor(f.Path, string(f.Side), f.Line)
-		g := Finding{
+		decorated = append(decorated, Finding{
 			Finding:     f,
 			Fingerprint: fingerprint.For(f.Path, string(f.Side), f.Category, f.Title, anchor),
 			Tier:        TierNotes,
+		})
+	}
+	if !rules.IsEmpty() {
+		var survivors []Finding
+		for _, g := range decorated {
+			if rules.Match(g.Fingerprint, g.Path, g.Category, string(g.Severity), g.Title) {
+				res.Ignored = append(res.Ignored, g)
+				res.Stats.IgnoredCount++
+				continue
+			}
+			survivors = append(survivors, g)
 		}
-		if findings.AtLeastAsSevere(f.Severity, inlineFloor) && f.Confidence >= cfg.InlineMinConfidence {
+		decorated = survivors
+		prior = filterPrior(rules, prior)
+	}
+
+	// 3. Confidence floor.
+	survivors := make([]Finding, 0, len(decorated))
+	for _, g := range decorated {
+		if g.Confidence < cfg.MinConfidence {
+			res.Stats.FindingsBelowFloor++
+			continue
+		}
+		survivors = append(survivors, g)
+	}
+
+	// 4. Tier routing.
+	inlineFloor := findings.Severity(cfg.InlineMinSeverity)
+	var inline, notes []Finding
+	for _, g := range survivors {
+		if findings.AtLeastAsSevere(g.Severity, inlineFloor) && g.Confidence >= cfg.InlineMinConfidence {
 			g.Tier = TierInline
 			inline = append(inline, g)
 		} else {
+			g.Tier = TierNotes
 			notes = append(notes, g)
 		}
 	}
@@ -202,6 +226,23 @@ func markRepeated(fs []Finding, prior map[string]CompactFinding, current map[str
 			*counter++
 		}
 	}
+}
+
+// filterPrior drops prior compact findings matched by active ignore rules.
+func filterPrior(rules ignore.Rules, prior []CompactFinding) []CompactFinding {
+	if rules.IsEmpty() {
+		return prior
+	}
+	in := make([]ignore.CompactFinding, len(prior))
+	for i, p := range prior {
+		in[i] = ignore.CompactFinding{Fp: p.Fp, Path: p.Path, Category: p.Category, Severity: p.Severity, Title: p.Title}
+	}
+	filtered := rules.FilterCompact(in)
+	out := make([]CompactFinding, len(filtered))
+	for i, f := range filtered {
+		out[i] = CompactFinding{Fp: f.Fp, Path: f.Path, Category: f.Category, Severity: f.Severity, Title: f.Title}
+	}
+	return out
 }
 
 // fromCompact reconstructs a carried gate.Finding from a v2 metadata record.

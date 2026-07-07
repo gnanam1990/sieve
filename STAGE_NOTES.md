@@ -1073,21 +1073,53 @@ supply-chain verification.
    `data_dir/dead.jsonl` survives restarts.
 6. **Dependabot for Go modules** — already done.
 
-## Next concrete stage
+# Stage 11 — Dismiss/Ignore Rule System
 
-The remaining gap is a **dismiss/ignore rule system**: users can tell sieve
-"this finding is noise / accepted risk" so it stops re-posting the same
-fingerprint. This needs:
+## Goal
 
-- a `.sieve/ignore.yml` or repo-level config section with per-path/category
-  patterns and optional expiration,
-- a `sieve ignore --repo R --pr N --fingerprint FP` CLI that writes to the
-  store (or opens a PR against `.sieve/ignore.yml`),
-- gate integration that drops ignored fingerprints before routing,
-- a walkthrough section showing which findings were ignored this run.
+Let maintainers suppress known-acceptable or noisy findings so sieve stops
+re-posting them, while keeping the suppression decision visible and auditable.
 
-This is Stage 11. Stage 10 is declared complete once the v0.2.1 release items
-above are in `main` and the smoke test is green.
+## Decisions / smallest-reasonable-choice notes
+
+- **File-controlled rules in `.sieve/ignore.yml`.** The file lives in the repo
+  root like `.sieve/learnings.md`, so ignore decisions are versioned and
+  reviewed through normal PR workflow. No separate store or write path is needed.
+- **CLI appends rules without auto-committing.** `sieve ignore --fingerprint FP`
+  writes to the worktree file and preserves a hand-written preamble above a
+  `# sieve:ignore` marker. The maintainer commits the change.
+- **Matchers use simple glob + exact fields.** `path` supports `*`, `**`, and
+  leading `!` negation; `category`, `severity`, and `title` are exact/substring
+  matches; `fingerprint` is an exact replacement key. Multiple fields on one
+  rule are ANDed; a finding matches if any active rule matches.
+- **Expiration is optional and UTC.** `expires: YYYY-MM-DD` is parsed at load
+  time against `time.Now()`.
+- **Gate placement is after fingerprints, before the floor.** Ignored findings
+  are reported separately in `GateResult.Ignored` and `Stats.IgnoredCount`, so
+  they do not silently disappear and do not consume the inline cap.
+- **Prior/carried/anchor-gone findings are also filtered.** This prevents an
+  ignored fingerprint from re-appearing as "resolved" or being carried forward
+  indefinitely.
+
+## Offline gates
+
+- `go vet ./...` clean; `golangci-lint` clean.
+- `make test` (`-race -shuffle=on`) green.
+- `make cover` green: `internal/ignore` 91.1% (≥90), overall 86.6% (≥85).
+- New tests:
+  - `internal/ignore` unit tests for parse/marshal, glob matching,
+    expiration, rule replacement, compact filtering.
+  - `internal/gate.TestIgnoreRules` verifies ignore drops and stats.
+  - `internal/review.TestRunLocalReviewIgnores` end-to-end with two findings,
+    one suppressed by category.
+  - `cmd/sieve.TestIgnoreCLI` verifies no-matcher error, rule append, and
+    preamble preservation.
+
+## Live validation
+
+Deferred. Stage 11 has no unique live gate beyond the general batch; its
+purpose is to land the ignore system in `main` in a documented, tested,
+regression-guarded state.
 
 ---
 

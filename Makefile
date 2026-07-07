@@ -21,6 +21,7 @@ COVER_GRAMMAR_MIN     := 90
 COVER_SYMBOLS_MIN     := 90
 COVER_REPOMAP_MIN     := 90
 COVER_BLAST_MIN       := 90
+COVER_IGNORE_MIN      := 90
 COVER_OVERALL_MIN     := 85
 
 .PHONY: build test lint cover golden clean
@@ -56,6 +57,7 @@ cover:
 	symbolspkg=$(call pkgcover,./internal/symbols,./internal/symbols); \
 	repomappkg=$(call pkgcover,./internal/repomap,./internal/repomap); \
 	blastpkg=$(call pkgcover,./internal/blast,./internal/blast); \
+	ignorepkg=$(call pkgcover,./internal/ignore,./internal/ignore); \
 	echo "internal/diff coverage: $$diffpkg% (min $(COVER_DIFF_MIN)%)"; \
 	echo "internal/findings coverage: $$findpkg% (min $(COVER_FINDINGS_MIN)%)"; \
 	echo "internal/provider/... coverage: $$provpkg% (min $(COVER_PROVIDER_MIN)%)"; \
@@ -69,6 +71,7 @@ cover:
 	echo "internal/symbols coverage: $$symbolspkg% (min $(COVER_SYMBOLS_MIN)%)"; \
 	echo "internal/repomap coverage: $$repomappkg% (min $(COVER_REPOMAP_MIN)%)"; \
 	echo "internal/blast coverage: $$blastpkg% (min $(COVER_BLAST_MIN)%)"; \
+	echo "internal/ignore coverage: $$ignorepkg% (min $(COVER_IGNORE_MIN)%)"; \
 	echo "overall coverage: $$overall% (min $(COVER_OVERALL_MIN)%)"; \
 	rm -f coverage.tmp.out; \
 	fail=0; \
@@ -85,6 +88,7 @@ cover:
 	awk -v v="$$symbolspkg" -v min=$(COVER_SYMBOLS_MIN) 'BEGIN{exit !(v+0>=min)}' || { echo "FAIL: internal/symbols below $(COVER_SYMBOLS_MIN)%)"; fail=1; }; \
 	awk -v v="$$repomappkg" -v min=$(COVER_REPOMAP_MIN) 'BEGIN{exit !(v+0>=min)}' || { echo "FAIL: internal/repomap below $(COVER_REPOMAP_MIN)%)"; fail=1; }; \
 	awk -v v="$$blastpkg" -v min=$(COVER_BLAST_MIN) 'BEGIN{exit !(v+0>=min)}' || { echo "FAIL: internal/blast below $(COVER_BLAST_MIN)%)"; fail=1; }; \
+	awk -v v="$$ignorepkg" -v min=$(COVER_IGNORE_MIN) 'BEGIN{exit !(v+0>=min)}' || { echo "FAIL: internal/ignore below $(COVER_IGNORE_MIN)%)"; fail=1; }; \
 	awk -v v="$$overall" -v min=$(COVER_OVERALL_MIN) 'BEGIN{exit !(v+0>=min)}' || { echo "FAIL: overall below $(COVER_OVERALL_MIN)%)"; fail=1; }; \
 	exit $$fail
 

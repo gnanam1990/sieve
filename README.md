@@ -609,6 +609,53 @@ quietly.
 Context is rendered under `# Repository context` in the prompt and is counted
 against the pre-flight token budget.
 
+## Suppressing findings
+
+Maintainers can tell sieve to drop known-acceptable findings by committing
+`.sieve/ignore.yml` in the repo root:
+
+```yaml
+ignore:
+  - fingerprint: abc123...          # exact sieve fingerprint
+    reason: accepted race in legacy path
+    expires: 2026-12-31             # optional; rule is ignored after this date
+  - category: style                 # match any style finding
+    reason: generated files are not styled
+    path: "**/*.pb.go"              # optional path glob
+  - severity: nit
+    reason: nits are handled separately
+```
+
+Matchers:
+
+| Field | Match |
+|---|---|
+| `fingerprint` | exact sieve fingerprint (replaces an existing rule with the same fingerprint) |
+| `path` | glob with `*` (one segment) and `**` (any segments); leading `!` negates |
+| `category` | exact category string |
+| `severity` | exact severity string |
+| `title` | substring of the finding title |
+
+Multiple fields on the same rule are ANDed. A finding is ignored if **any**
+active rule matches. `expires` is parsed as `YYYY-MM-DD` in UTC.
+
+Add a rule from the CLI without editing YAML by hand:
+
+```sh
+sieve ignore --fingerprint FP --reason "accepted"
+sieve ignore --category style --path "**/*.pb.go" --reason "generated"
+sieve ignore --title "nil pointer in test" --severity nit
+```
+
+The command writes to `.sieve/ignore.yml` in the current worktree and **never**
+auto-commits. It preserves any hand-written preamble above a `# sieve:ignore`
+marker. Use `--file` to target another path.
+
+Ignored findings are dropped after fingerprint decoration but before the
+confidence floor and tier routing. The walkthrough footer reports the count, and
+the CLI summary prints `ignored` separately so suppressed findings remain
+visible rather than silent.
+
 ## Limits
 
 - Diff fetch capped at **5 MB** (truncated at the last complete file

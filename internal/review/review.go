@@ -41,6 +41,7 @@ type Stats struct {
 
 	FindingsTotal   int // surviving (anchor-valid) findings
 	FindingsDropped int // rejected by the anchor/shape gate
+	IgnoredCount    int // findings dropped by repository ignore rules
 	BatchesFailed   int
 	Requests        int
 	Retries         int
@@ -233,8 +234,12 @@ func Run(ctx context.Context, opts Options) (*ReviewContext, error) {
 			return nil, err
 		}
 	}
-	if err := gateAndPost(ctx, rc, cfg, opts, kept, plan, prior, poster, loc); err != nil {
+	if err := gateAndPost(ctx, rc, client, cfg, opts, kept, plan, prior, poster, loc); err != nil {
 		return nil, err
+	}
+	if rc.Gate != nil {
+		rc.Stats.IgnoredCount = rc.Gate.Stats.IgnoredCount
+		rc.Stats.FindingsTotal = len(rc.Gate.Inline) + len(rc.Gate.Notes)
 	}
 	return rc, nil
 }
@@ -429,11 +434,26 @@ func (rc *ReviewContext) WriteSummary(w io.Writer) {
 	fmt.Fprintf(w, "\n%d files total, %d to review, %d skipped, +%d -%d lines\n",
 		rc.Stats.FilesTotal, rc.Stats.FilesReviewed, rc.Stats.FilesSkipped, rc.Stats.LinesAdded, rc.Stats.LinesRemoved)
 
-	if len(rc.Findings) > 0 {
-		fmt.Fprintf(w, "\nFINDINGS (%d)\n", len(rc.Findings))
+	activeCount := len(rc.Findings)
+	if rc.Gate != nil {
+		activeCount = len(rc.Gate.Inline) + len(rc.Gate.Notes)
+	}
+	if activeCount > 0 {
+		fmt.Fprintf(w, "\nFINDINGS (%d)\n", activeCount)
 		ftw := tabwriter.NewWriter(w, 2, 4, 2, ' ', 0)
 		fmt.Fprintln(ftw, "SEVERITY\tLOCATION\tCONF\tTITLE")
-		for _, f := range rc.Findings {
+		var active []findings.Finding
+		if rc.Gate != nil {
+			for _, f := range rc.Gate.Inline {
+				active = append(active, f.Finding)
+			}
+			for _, f := range rc.Gate.Notes {
+				active = append(active, f.Finding)
+			}
+		} else {
+			active = rc.Findings
+		}
+		for _, f := range active {
 			loc := fmt.Sprintf("%s:%d", f.Path, f.Line)
 			if f.EndLine > 0 {
 				loc = fmt.Sprintf("%s:%d-%d", f.Path, f.Line, f.EndLine)
@@ -443,8 +463,8 @@ func (rc *ReviewContext) WriteSummary(w io.Writer) {
 		ftw.Flush() //nolint:errcheck // best-effort human output
 	}
 	if rc.Stats.Requests > 0 {
-		fmt.Fprintf(w, "\n%d findings (%d dropped by anchor gate), %d requests (%d retries, %d batches failed), tokens in/out %d/%d\n",
-			rc.Stats.FindingsTotal, rc.Stats.FindingsDropped, rc.Stats.Requests, rc.Stats.Retries,
+		fmt.Fprintf(w, "\n%d findings (%d dropped by anchor gate, %d ignored), %d requests (%d retries, %d batches failed), tokens in/out %d/%d\n",
+			rc.Stats.FindingsTotal, rc.Stats.FindingsDropped, rc.Stats.IgnoredCount, rc.Stats.Requests, rc.Stats.Retries,
 			rc.Stats.BatchesFailed, rc.Stats.InputTokens, rc.Stats.OutputTokens)
 	}
 	if rc.Stats.Pipeline != "" && rc.Stats.Pipeline != "single" {

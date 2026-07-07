@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/gnanam1990/sieve/internal/config"
 	"github.com/gnanam1990/sieve/internal/gh"
+	"github.com/gnanam1990/sieve/internal/ignore"
 	"github.com/gnanam1990/sieve/internal/local"
 	"github.com/gnanam1990/sieve/internal/memory"
 	"github.com/gnanam1990/sieve/internal/review"
@@ -56,6 +58,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runServe(args[1:], stdout, stderr)
 	case "admin":
 		return runAdmin(args[1:], stdout, stderr)
+	case "ignore":
+		return runIgnore(args[1:], stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, version.Info())
 		return exitOK
@@ -448,6 +452,106 @@ func runStats(args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
+// runIgnore adds a suppression rule to .sieve/ignore.yml in the current
+// worktree. It never commits — the maintainer reviews and commits the change.
+func runIgnore(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("ignore", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		fp       = fs.String("fingerprint", "", "exact sieve fingerprint to ignore")
+		path     = fs.String("path", "", "path glob pattern (e.g. 'vendor/**' or '**/*.pb.go')")
+		category = fs.String("category", "", "finding category to ignore (bug|security|perf|correctness|test|style)")
+		severity = fs.String("severity", "", "severity to ignore (critical|major|minor|nit)")
+		title    = fs.String("title", "", "substring match against finding titles")
+		reason   = fs.String("reason", "", "human note explaining the rule")
+		expires  = fs.String("expires", "", "expiration date YYYY-MM-DD")
+		file     = fs.String("file", ignore.DefaultFile, "ignore file path")
+		debug    = fs.Bool("debug", false, "debug logging")
+	)
+	if err := fs.Parse(args); err != nil {
+		return exitError
+	}
+	if *fp == "" && *path == "" && *category == "" && *severity == "" && *title == "" {
+		fmt.Fprintln(stderr, "error: ignore needs at least one of --fingerprint, --path, --category, --severity, --title")
+		return exitError
+	}
+
+	logger := newLogger(stderr, *debug)
+
+	rule := ignore.Rule{
+		Fingerprint: *fp,
+		Path:        *path,
+		Category:    *category,
+		Severity:    *severity,
+		Title:       *title,
+		Reason:      *reason,
+	}
+	if *expires != "" {
+		if _, err := time.Parse("2006-01-02", *expires); err != nil {
+			fmt.Fprintf(stderr, "error: invalid --expires %q: %v\n", *expires, err)
+			return exitError
+		}
+		rule.Expires, _ = time.Parse("2006-01-02", *expires)
+	}
+
+	manual, managed, hasMarker, err := readIgnoreFile(*file, logger)
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	rules, err := ignore.Parse([]byte(managed))
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	rules, _ = rules.Add(rule)
+
+	if err := os.MkdirAll(filepath.Dir(*file), 0o755); err != nil { //nolint:gosec // worktree dir
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	f, err := os.Create(*file)
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	defer f.Close() //nolint:errcheck // best-effort
+
+	if strings.TrimSpace(manual) != "" {
+		fmt.Fprint(f, strings.TrimRight(manual, "\n"))
+		fmt.Fprint(f, "\n\n")
+	}
+	if hasMarker || strings.TrimSpace(manual) != "" {
+		fmt.Fprintln(f, ignore.Marker)
+	}
+	if err := rules.WriteYAML(f); err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	fmt.Fprintf(stdout, "added rule to %s\n", *file)
+	return exitOK
+}
+
+// readIgnoreFile splits a .sieve/ignore.yml into a hand-written preamble and the
+// machine-managed rule block. A missing file is an empty managed block.
+func readIgnoreFile(path string, log *slog.Logger) (manual, managed string, hasMarker bool, err error) {
+	data, err := os.ReadFile(path) //nolint:gosec // worktree path
+	if os.IsNotExist(err) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	body := string(data)
+	idx := strings.Index(body, ignore.Marker)
+	if idx < 0 {
+		return "", body, false, nil
+	}
+	manual = body[:idx]
+	managed = strings.TrimPrefix(body[idx+len(ignore.Marker):], "\n")
+	return manual, managed, true, nil
+}
+
 // newLogger builds the stderr slog logger at the requested level.
 func newLogger(stderr io.Writer, debug bool) *slog.Logger {
 	level := slog.LevelInfo
@@ -481,6 +585,7 @@ usage:
   sieve sync --repo owner/name --pr N               rebuild the local outcome store from GitHub
   sieve learnings --repo owner/name                 draft repo rules from outcomes -> .sieve/learnings.md
   sieve stats --repo owner/name [--json]            per-category addressed-rate + reactions
+  sieve ignore --fingerprint FP                     add a suppression rule to .sieve/ignore.yml
   sieve serve --config /etc/sieve/server.yml        run the self-host daemon (webhooks + App auth)
   sieve admin --url URL --secret-env VAR            query a daemon's /admin endpoint
   sieve version                                     print version
@@ -499,6 +604,16 @@ review flags:
   --json-only  suppress the stderr summary
   --sarif      write a SARIF v2.1.0 report to this file for GitHub Security tab upload
   --debug      debug logging
+
+ignore flags:
+  --fingerprint  exact sieve fingerprint to ignore
+  --path         path glob pattern (e.g. 'vendor/**' or '**/*.pb.go')
+  --category     finding category to ignore
+  --severity     severity to ignore
+  --title        substring match against finding titles
+  --reason       human note explaining the rule
+  --expires      expiration date YYYY-MM-DD
+  --file         ignore file path (default: .sieve/ignore.yml)
 
 exit codes: 0 ok · 1 error · 2 partial (truncated input, failed batch, or a
 failed inline comment post)

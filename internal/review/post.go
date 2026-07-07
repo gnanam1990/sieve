@@ -3,7 +3,9 @@ package review
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/gnanam1990/sieve/internal/config"
 	"github.com/gnanam1990/sieve/internal/diff"
@@ -11,7 +13,9 @@ import (
 	"github.com/gnanam1990/sieve/internal/fingerprint"
 	"github.com/gnanam1990/sieve/internal/gate"
 	"github.com/gnanam1990/sieve/internal/gh"
+	"github.com/gnanam1990/sieve/internal/ignore"
 	"github.com/gnanam1990/sieve/internal/incremental"
+	"github.com/gnanam1990/sieve/internal/local"
 	"github.com/gnanam1990/sieve/internal/memory"
 	"github.com/gnanam1990/sieve/internal/post"
 	"github.com/gnanam1990/sieve/internal/render"
@@ -65,17 +69,24 @@ func planReview(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg c
 // IDs can be recovered and stamped into the walkthrough metadata (cids power
 // carry-forward and reactions). A partial inline failure is exit 2 but still
 // writes the walkthrough; a walkthrough failure is exit 1.
-func gateAndPost(ctx context.Context, rc *ReviewContext, cfg config.Config, opts Options, kept []diff.FileDiff, plan incremental.Plan, prior []gate.CompactFinding, poster *post.Poster, loc post.Locator) error {
+func gateAndPost(ctx context.Context, rc *ReviewContext, client *gh.Client, cfg config.Config, opts Options, kept []diff.FileDiff, plan incremental.Plan, prior []gate.CompactFinding, poster *post.Poster, loc post.Locator) error {
 	if cfg.Review.Calibration {
 		applyCalibration(rc, opts)
 	}
 	idx := fingerprint.NewContentIndex(kept)
 	priorReviewed := plan.PriorForReviewedPaths(prior)
-	res := gate.Route(rc.Findings, idx, priorReviewed, cfg.Review)
+
+	rules, err := loadIgnoreRules(ctx, rc, client, opts)
+	if err != nil {
+		return fmt.Errorf("load ignore rules: %w", err)
+	}
+	activeRules := rules.Active(time.Now())
+
+	res := gate.Route(rc.Findings, idx, priorReviewed, cfg.Review, activeRules)
 	if !plan.Full {
-		res.AddCarried(plan.Carried)
-		res.AddResolved(plan.AnchorGone)
-		rc.Stats.FindingsCarriedForward = len(plan.Carried)
+		res.AddCarried(filterCompacts(activeRules, plan.Carried))
+		res.AddResolved(filterCompacts(activeRules, plan.AnchorGone))
+		rc.Stats.FindingsCarriedForward = len(plan.Carried) - countIgnoredCompacts(activeRules, plan.Carried)
 	}
 	rc.Gate = &res
 
@@ -111,6 +122,7 @@ func gateAndPost(ctx context.Context, rc *ReviewContext, cfg config.Config, opts
 		Skipped:       skippedFiles(rc),
 		FilesReviewed: rc.Stats.FilesReviewed,
 		FilesSkipped:  rc.Stats.FilesSkipped,
+		Ignored:       res.Ignored,
 		Model:         modelLabel(cfg),
 		Learnings:     rc.learningsCount,
 		Calibrated:    cfg.Review.Calibration,
@@ -133,6 +145,73 @@ func gateAndPost(ctx context.Context, rc *ReviewContext, cfg config.Config, opts
 
 // memoryHost is the store host segment. sieve targets github.com only today.
 const memoryHost = "github.com"
+
+// ignoreFetcher resolves .sieve/ignore.yml from the local worktree or from
+// GitHub contents at the review head.
+type ignoreFetcher struct {
+	local  bool
+	dir    string
+	client *gh.Client
+	owner  string
+	name   string
+	ref    string
+}
+
+func (f ignoreFetcher) Fetch(ctx context.Context, path string) ([]byte, error) {
+	if f.local {
+		data, err := local.ReadFile(f.dir, path)
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return data, err
+	}
+	data, err := f.client.GetContents(ctx, f.owner, f.name, path, f.ref)
+	if err != nil && gh.NotFound(err) {
+		return nil, nil
+	}
+	return data, err
+}
+
+// loadIgnoreRules loads the repository ignore file for this review. A missing
+// file is not an error; a malformed file is.
+func loadIgnoreRules(ctx context.Context, rc *ReviewContext, client *gh.Client, opts Options) (ignore.Rules, error) {
+	fetch := ignoreFetcher{local: opts.Local, dir: opts.RepoPath, client: client}
+	if !opts.Local {
+		owner, name, _ := strings.Cut(rc.Repo, "/")
+		fetch.owner = owner
+		fetch.name = name
+		fetch.ref = rc.HeadSHA
+	}
+	return ignore.Load(ctx, fetch)
+}
+
+// filterCompacts drops compact findings matched by active ignore rules.
+func filterCompacts(rules ignore.Rules, cfs []gate.CompactFinding) []gate.CompactFinding {
+	if rules.IsEmpty() {
+		return cfs
+	}
+	out := make([]gate.CompactFinding, 0, len(cfs))
+	for _, c := range cfs {
+		if !rules.Match(c.Fp, c.Path, c.Category, c.Severity, c.Title) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// countIgnoredCompacts counts how many compact findings the active rules match.
+func countIgnoredCompacts(rules ignore.Rules, cfs []gate.CompactFinding) int {
+	if rules.IsEmpty() {
+		return 0
+	}
+	n := 0
+	for _, c := range cfs {
+		if rules.Match(c.Fp, c.Path, c.Category, c.Severity, c.Title) {
+			n++
+		}
+	}
+	return n
+}
 
 // fpsOf extracts the fingerprints of a resolved-finding slice.
 func fpsOf(cfs []gate.CompactFinding) []string {
