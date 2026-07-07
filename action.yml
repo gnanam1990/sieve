@@ -51,6 +51,14 @@ inputs:
     description: "Fail the step if cosign signature files (.sig/.cert) are missing or their verification fails. Set true when you require supply-chain verification."
     required: false
     default: "false"
+  repo:
+    description: "Repository as owner/name. Default is GITHUB_REPOSITORY. Useful for smoke tests or non-pull_request event triggers."
+    required: false
+    default: ""
+  pr:
+    description: "Pull request number. Default is from GITHUB_EVENT_PATH. Useful for smoke tests or non-pull_request event triggers."
+    required: false
+    default: ""
 
 outputs:
   inline_count:
@@ -194,6 +202,8 @@ runs:
         POST: ${{ inputs.post }}
         FAIL_ON_PARTIAL: ${{ inputs.fail_on_partial }}
         SARIF_FILES: ${{ inputs.sarif_files }}
+        REPO: ${{ inputs.repo }}
+        PR: ${{ inputs.pr }}
         # sieve reads repo/PR from GITHUB_REPOSITORY + GITHUB_EVENT_PATH, the
         # GitHub token from GITHUB_TOKEN, and the model key from the env var
         # named by api_key_env_name — all inherited from the job env.
@@ -227,6 +237,8 @@ runs:
         fi
 
         args=(review --config "${cfg}")
+        if [ -n "${REPO}" ]; then args+=(--repo "${REPO}"); fi
+        if [ -n "${PR}" ]; then args+=(--pr "${PR}"); fi
         if [ "${POST}" = "true" ]; then args+=(--post); fi
         if [ -n "${SARIF_FILES}" ]; then
           args+=(--sarif "${SARIF_FILES}")

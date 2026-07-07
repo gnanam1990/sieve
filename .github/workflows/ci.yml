@@ -65,6 +65,8 @@ jobs:
           provider: fake
           post: false
           version: v0.2.1
+          repo: gnanam1990/sieve
+          pr: "1"
 
   shellcheck:
     runs-on: ubuntu-latest
