@@ -1151,6 +1151,69 @@ regression-guarded state.
 
 ---
 
+# Stage 12 — Ignore Rule Suggestions
+
+## Goal
+
+Close the loop between suppression signals (`sieve learnings` clusters and
+GitHub review-thread dismissals) and the `.sieve/ignore.yml` rule file. Sieve
+should propose concrete ignore rules and let a maintainer apply them with one
+command, instead of forcing manual rule authoring.
+
+## Decisions / smallest-reasonable-choice notes
+
+- **Two signal sources:**
+  1. `internal/learnings` clusters — repeated false-positive patterns that
+     have been downvoted or dismissed.
+  2. GitHub resolved review threads — when a maintainer resolves a sieve
+     inline comment via the GitHub UI, that finding is a suppression candidate.
+- **Suggestion is read-only and auditable.** The CLI prints the proposed rule,
+  explains the signal (e.g., "dismissed 3 times in PRs #42, #47, #51"), and
+  appends it to `.sieve/ignore.yml` only when the maintainer confirms. No
+  automatic repository writes.
+- **Rule generation picks the least-broad matcher that covers the signal.**
+  Preference order: fingerprint (most precise) → path+category+title substring
+  → path glob → category. The goal is to stop the exact noise without hiding
+  unrelated findings.
+- **Expiration default.** Suggested rules carry a 90-day default expiration so
+  stale suppressions are reviewed again; `--no-expiry` keeps them permanent.
+- **Dismissal integration is GraphQL-only where needed.** Reuse or extend
+  `internal/gh/graphql.go` (`ResolvedThreads`) to fetch resolved review threads
+  per PR; the read is allowlisted in the posting-isolation test.
+- **`sieve ignore --suggest` and `sieve ignore --apply-suggestion`.** The first
+  prints candidate rules; the second appends a chosen rule to the local
+  `.sieve/ignore.yml` with preamble preservation.
+- **Daemon/Action path.** Suggestions are CLI-only in this stage; the daemon and
+  Action continue to post findings normally. A future stage may surface
+  suggestion footers in walkthroughs.
+
+## Offline gates
+
+- `go vet ./...` clean; `golangci-lint` clean.
+- `make test` (`-race -shuffle=on`) green.
+- `make cover` green; new `internal/ignore/suggest` package ≥ 90%, overall
+  ≥ 85%.
+- Tests:
+  - Suggestion ranking from fake learning clusters.
+  - Dismissal→rule mapping from a mocked GraphQL response.
+  - CLI `--suggest` / `--apply-suggestion` with temp repo and fake provider.
+  - Preamble preservation and marker handling when appending a suggested rule.
+  - Isolation: no new packages write to GitHub except through existing
+    `internal/post` / `internal/gh` paths.
+
+## Live validation
+
+- Run `sieve learnings` on a sandbox PR with a planted low-value finding, give
+  it 👎/dismiss, then run `sieve ignore --suggest` and verify the proposed rule
+  matches the finding.
+- Open a real PR, dismiss one sieve inline comment, and confirm
+  `sieve ignore --suggest` surfaces a fingerprinted rule backed by that
+  dismissal.
+- Apply the suggestion, re-run the review, and confirm the suppressed finding
+  appears under **Ignored** in the walkthrough footer.
+
+---
+
 # Offline-first local review
 
 Added `sieve review --local` so the CLI can review a local git worktree without
