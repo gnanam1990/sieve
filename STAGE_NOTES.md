@@ -152,9 +152,18 @@ Executed after the Stages 5–9 batch.
   quick install, Fly.io, and observability.
 - [x] **Title-drift fingerprint fix** — `fingerprint.For` now hashes only
   `path|side|category|trim(anchor)`; the title is deliberately excluded, so a
-  `temperature: 1` rephrase of an identical issue keeps the same fingerprint and
-  is not reported as resolved+new. Golden fingerprints in review testdata were
-  regenerated.
+  `temperature: 1` rephrase of an identical issue with the **same anchor line**
+  keeps the same fingerprint and is not reported as resolved+new. Golden
+  fingerprints in review testdata were regenerated.
+- [x] **Live Kimi re-run (v0.2.0)** — sandbox
+  `gnanam1990/sieve-sandbox-v020-fingerprint2`, PR #1, Kimi
+  `kimi-for-coding` via Ollama (`temperature: 1`). First run: 10/10 recall,
+  8 inline + 2 notes. Identical-code re-run: walkthrough updated in place with
+  **8 repeated inline, 2 repeated notes, 3 resolved**. The 3 resolved were
+  findings whose **start line changed** between runs (25→29, 38→40, 74→80) —
+  the title rephrasing itself did not cause drift for findings that kept the
+  same anchor. This confirms the v0.2.0 fix handles title rephrasing but
+  remaining anchor-line drift is model-consistency noise. README caveat updated.
 - [x] **Per-provider cost guardrails** — `max_input_tokens` caps the per-request
   input budget per provider (0 = default 24k). `review.max_run_tokens` now scales
   the pre-flight estimate for the `judge` pipeline (1.25× to cover generator +

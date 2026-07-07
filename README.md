@@ -310,8 +310,10 @@ provider:
 
 Kimi's API requires `temperature: 1` for `kimi-for-coding`; lower values are
 rejected. The fingerprint that drives cross-run "Resolved since last review"
-excludes the title, so rephrased findings with the same anchor are no longer
-mis-reported as resolved+new.
+excludes the title, so rephrased findings with the **same anchor line** are no
+longer mis-reported as resolved+new. If the model also re-anchors the finding
+(changes the reported start line), the fingerprint will still change; this is
+a model consistency issue, not a fingerprint issue.
 
 ### Groq
 

@@ -137,14 +137,14 @@ func BuildBatches(in Input) []Batch {
 }
 
 // BuildBatchesWithCap is BuildBatches with a per-provider max_input_tokens
-// cap. cap <= 0 means "use default". The cap applies to the prompt body only;
-// the provider max_tokens field still governs the model's output budget.
-func BuildBatchesWithCap(in Input, cap int) []Batch {
+// cap. maxTokens <= 0 means "use default". The cap applies to the prompt body
+// only; the provider max_tokens field still governs the model's output budget.
+func BuildBatchesWithCap(in Input, maxTokens int) []Batch {
 	header := renderHeader(in)
 	headerTok := estimateTokens(len(header))
 	maxBatch := maxInputTokensDefault
-	if cap > 0 {
-		maxBatch = cap
+	if maxTokens > 0 {
+		maxBatch = maxTokens
 	}
 	if maxBatch < headerTok+256 {
 		maxBatch = headerTok + 256
