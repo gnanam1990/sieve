@@ -145,6 +145,10 @@ run_review() {
   # Guard R1.3: only ever post to the repo we created under our own account.
   [[ "$o/$REPO_NAME" == "$o/${SIEVE_SANDBOX_REPO:-sieve-sandbox-recall}" ]] || die "refusing to post to a non-sandbox repo"
 
+  # sieve reads the GitHub token from GITHUB_TOKEN; gh CLI authenticated here
+  # means its token works for the API calls sieve needs.
+  export GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token)}"
+
   cd "$WORKDIR"
   model_config > .sieve.yml
   log "running sieve review --post against $o/$REPO_NAME#$num"
