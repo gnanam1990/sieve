@@ -1369,3 +1369,75 @@ the default posting behavior or auto-applying anything.
   only receives suggestions when `opts.Post` is true; unit tests assert the
   section is omitted when the suggestion list is empty, and read-only runs never
   reach the post path.
+
+---
+
+# Stage 14 — Local interactive TUI
+
+## Goal
+
+Give sieve a client-side, zero-infra terminal UI (`sieve tui`) that lets a
+maintainer pick a repo/PR or a local worktree, run a review, browse findings,
+down-vote them, suppress them, and generate local reports — all without posting
+to GitHub or starting any server.
+
+## Decisions
+
+- **Bubble Tea + Lipgloss** — chosen for a real interactive experience. Pinned
+  to `v1.1.0` / `v0.13.0` so the module stays on Go 1.23.4 and the dependency
+  expansion stays bounded (no `bubbles` / `huh` / etc.).
+- **No new GitHub writes** — the TUI reuses `review.Run` (read-only by default)
+  and only mutates the local memory store (`memory.Store`) and the worktree's
+  `.sieve/ignore.yml`.
+- **Separate memory per project** — the project picker scans the existing
+  `~/.local/share/sieve/github.com/<owner>/<repo>` layout; no new hosted state.
+- **Learn from reviews** — down-votes and ignore actions are recorded as local
+  events, so `sieve ignore --suggest` and the TUI's own suggestion panel can
+  propose suppression rules later.
+
+## Files added / changed
+
+- `internal/tui/` — new package with model, update loop, views, key bindings,
+  review runner, ignore helper, project scanner, and tests.
+- `cmd/sieve/main.go` — adds the `tui` subcommand and usage line.
+- `go.mod` / `go.sum` — adds `bubbletea` and `lipgloss` (and small transitive
+  tree) while keeping `go 1.23.4`.
+- `Makefile` — adds `COVER_TUI_MIN := 85` and the per-package coverage gate.
+- `STAGE_NOTES.md` — this section.
+
+## Offline gates
+
+- [x] `make test` green.
+- [x] `make lint` green.
+- [x] `make cover` green: `internal/tui` ≥ 85% and all existing package minima
+  still pass.
+- [x] `go build ./cmd/sieve` produces the binary with the new subcommand.
+
+## Usage
+
+```sh
+sieve tui                          # interactive menu
+sieve tui --repo owner/name --pr N # skip the menu and review a PR
+sieve tui --local --base main      # review the current worktree
+```
+
+Keys inside the TUI:
+- `[r]` review a PR · `[l]` local worktree · `[p]` recent projects · `[q]` quit
+- findings list: `[↵]` detail · `[d]` down-vote · `[i]` ignore · `[s]` suggestions · `[S]` save report
+- suggestion panel: `[a]` / `[↵]` apply selected rule · `[esc]` back
+
+## Live validation
+
+- [x] Ran a scripted headless TUI smoke against the `tui-smoke-test` branch of
+  `gnanam1990/argus` using a fake-provider fixture anchored at `README.md:98`.
+  The driver used `review.Run` with `--local`, fed the resulting
+  `ReviewContext` into the TUI model, and exercised `[d]` (down-vote), `[i]`
+  (ignore), and `[S]` (save report).
+- [x] Verified the local memory store (`events.jsonl`) contains `run`, `finding`,
+  and `reaction` events; verified `.sieve/ignore.yml` in the argus worktree
+  contains the finding fingerprint; and verified `sieve-report-gnanam1990-argus-0.json`
+  was written.
+- [x] Ran `/tmp/sieve-tui ignore --suggest --repo gnanam1990/argus` against the
+  smoke store and confirmed a fingerprint suggestion is produced.
+- [x] Cleaned up: removed the argus smoke branch, deleted `.sieve/ignore.yml` and
+  the report from the argus worktree, and removed the temporary fixture/config.

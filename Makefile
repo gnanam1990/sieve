@@ -23,6 +23,7 @@ COVER_REPOMAP_MIN     := 90
 COVER_BLAST_MIN       := 90
 COVER_IGNORE_MIN        := 90
 COVER_IGNORE_SUGGEST_MIN := 90
+COVER_TUI_MIN           := 85
 COVER_OVERALL_MIN       := 85
 
 .PHONY: build test lint cover golden clean
@@ -60,6 +61,7 @@ cover:
 	blastpkg=$(call pkgcover,./internal/blast,./internal/blast); \
 	ignorepkg=$(call pkgcover,./internal/ignore,./internal/ignore); \
 	suggestpkg=$(call pkgcover,./internal/ignore/suggest,./internal/ignore/suggest); \
+	tuipkg=$(call pkgcover,./internal/tui,./internal/tui); \
 	echo "internal/diff coverage: $$diffpkg% (min $(COVER_DIFF_MIN)%)"; \
 	echo "internal/findings coverage: $$findpkg% (min $(COVER_FINDINGS_MIN)%)"; \
 	echo "internal/provider/... coverage: $$provpkg% (min $(COVER_PROVIDER_MIN)%)"; \
@@ -75,6 +77,7 @@ cover:
 	echo "internal/blast coverage: $$blastpkg% (min $(COVER_BLAST_MIN)%)"; \
 	echo "internal/ignore coverage: $$ignorepkg% (min $(COVER_IGNORE_MIN)%)"; \
 	echo "internal/ignore/suggest coverage: $$suggestpkg% (min $(COVER_IGNORE_SUGGEST_MIN)%)"; \
+	echo "internal/tui coverage: $$tuipkg% (min $(COVER_TUI_MIN)%)"; \
 	echo "overall coverage: $$overall% (min $(COVER_OVERALL_MIN)%)"; \
 	rm -f coverage.tmp.out; \
 	fail=0; \
@@ -94,6 +97,7 @@ cover:
 	awk -v v="$$ignorepkg" -v min=$(COVER_IGNORE_MIN) 'BEGIN{exit !(v+0>=min)}' || { echo "FAIL: internal/ignore below $(COVER_IGNORE_MIN)%)"; fail=1; }; \
 	awk -v v="$$suggestpkg" -v min=$(COVER_IGNORE_SUGGEST_MIN) 'BEGIN{exit !(v+0>=min)}' || { echo "FAIL: internal/ignore/suggest below $(COVER_IGNORE_SUGGEST_MIN)%"; fail=1; }; \
 	awk -v v="$$overall" -v min=$(COVER_OVERALL_MIN) 'BEGIN{exit !(v+0>=min)}' || { echo "FAIL: overall below $(COVER_OVERALL_MIN)%)"; fail=1; }; \
+	awk -v v="$$tuipkg" -v min=$(COVER_TUI_MIN) 'BEGIN{exit !(v+0>=min)}' || { echo "FAIL: internal/tui below $(COVER_TUI_MIN)%"; fail=1; }; \
 	exit $$fail
 
 golden:

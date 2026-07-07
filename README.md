@@ -673,6 +673,22 @@ Suggested rules default to a 90-day expiry; use `--no-expiry` to keep one
 permanent. The suggestion path is read-only — no rule is applied or committed
 automatically.
 
+### Interactive TUI
+
+`sieve tui` is a local, terminal-based interface for browsing reviews without
+posting anything to GitHub:
+
+```sh
+sieve tui                          # pick from recent projects or start a review
+sieve tui --repo owner/name --pr N
+sieve tui --local --base main
+```
+
+Inside the TUI you can navigate findings, down-vote them, add suppression
+rules to `.sieve/ignore.yml`, view locally-suggested rules, and save the full
+review JSON report. Everything stays on your machine: the feedback is written to
+the same per-repo local store used by `sieve stats` and `sieve learnings`.
+
 Ignored findings are dropped after fingerprint decoration but before the
 confidence floor and tier routing. The walkthrough footer reports the count, and
 the CLI summary prints `ignored` separately so suppressed findings remain

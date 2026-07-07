@@ -27,6 +27,7 @@ import (
 	"github.com/gnanam1990/sieve/internal/review"
 	"github.com/gnanam1990/sieve/internal/sarif"
 	"github.com/gnanam1990/sieve/internal/server"
+	"github.com/gnanam1990/sieve/internal/tui"
 	"github.com/gnanam1990/sieve/internal/version"
 	"github.com/gnanam1990/sieve/internal/webhook"
 )
@@ -61,6 +62,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runAdmin(args[1:], stdout, stderr)
 	case "ignore":
 		return runIgnore(args[1:], stdout, stderr)
+	case "tui":
+		return runTui(args[1:], stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, version.Info())
 		return exitOK
@@ -718,6 +721,36 @@ func resolveRepoPR(repo *string, pr *int, token *string) {
 	}
 }
 
+// runTui starts the interactive terminal UI. It uses the real terminal, so
+// stdout/stderr are only used for startup errors.
+func runTui(args []string, _, stderr io.Writer) int {
+	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		repo      = fs.String("repo", "", "repository as owner/name")
+		pr        = fs.Int("pr", 0, "pull request number")
+		cfgPath   = fs.String("config", config.DefaultFile, "path to config file")
+		localMode = fs.Bool("local", false, "review the local git worktree against --base")
+		baseRef   = fs.String("base", "main", "base ref for --local review")
+		debug     = fs.Bool("debug", false, "write TUI debug logs to a temp file")
+	)
+	if err := fs.Parse(args); err != nil {
+		return exitError
+	}
+	if err := tui.Start(tui.Options{
+		Repo:       *repo,
+		PRNumber:   *pr,
+		ConfigPath: *cfgPath,
+		Local:      *localMode,
+		BaseRef:    *baseRef,
+		Debug:      *debug,
+	}); err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return exitError
+	}
+	return exitOK
+}
+
 func usage(w io.Writer) {
 	fmt.Fprint(w, `sieve — zero-infra PR reviewer
 
@@ -732,6 +765,7 @@ usage:
   sieve ignore --fingerprint FP                     add a suppression rule to .sieve/ignore.yml
   sieve ignore --suggest --repo owner/name          print ignore-rule proposals from negative outcomes
   sieve ignore --apply-suggestion N --repo owner/name  append the Nth proposal to .sieve/ignore.yml
+  sieve tui [--repo owner/name --pr N] [--local]    interactive terminal UI (local, zero-infra)
   sieve serve --config /etc/sieve/server.yml        run the self-host daemon (webhooks + App auth)
   sieve admin --url URL --secret-env VAR            query a daemon's /admin endpoint
   sieve version                                     print version
