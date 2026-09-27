@@ -3,7 +3,7 @@ module github.com/gnanam1990/sieve
 go 1.23.4
 
 require (
-	github.com/bmatcuk/doublestar/v4 v4.10.0
+	github.com/bmatcuk/doublestar/v4 v4.10.2
 	github.com/charmbracelet/bubbletea v1.1.0
 	github.com/charmbracelet/lipgloss v0.13.0
 	github.com/google/go-cmp v0.7.0
